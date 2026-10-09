@@ -38,7 +38,8 @@ export default ((opts?: InventoryOptions) => {
 
         <div class="inventory-panel" data-inventory-panel hidden>
           <p class="inventory-empty" data-inventory-empty>
-            Nothing stashed yet.
+            No items in your inventory yet. Use
+            <code>+ Stash</code> on any item block.
           </p>
 
           <ul class="inventory-list" data-inventory-items></ul>

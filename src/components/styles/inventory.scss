@@ -75,7 +75,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     gap: 0.35rem;
   }
 
-  .inventory-item {
+  .inventory-entry {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -84,10 +84,6 @@ $inv-accent: var(--linkColor, #0b6bcb);
 
     &:hover {
       background: color-mix(in srgb, $inv-accent 10%, transparent);
-    }
-
-    &.is-current .inventory-link {
-      font-weight: 700;
     }
   }
 
@@ -146,12 +142,29 @@ $inv-accent: var(--linkColor, #0b6bcb);
   }
 }
 
-// Stash button injected at the top of the article body by the inline script.
-.inventory-stash {
+// --- Item blocks -----------------------------------------------------------
+// ```item fences rendered by rehype-pretty-code, tagged at runtime.
+
+figure:has(> pre[data-language="item"]) {
+  position: relative;
+  margin: 1rem 0;
+}
+
+.inventory-item-block {
+  font-style: italic;
+
+  // The item name is the payload; drop the trailing blank lines the fence
+  // leaves behind so the block reads as a single line.
+  span[data-line]:last-child {
+    display: none;
+  }
+}
+
+.inventory-item-toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  margin-bottom: 1rem;
+  margin-top: 0.35rem;
   padding: 0.2rem 0.6rem;
   border: 1px solid $inv-border;
   border-radius: 999px;

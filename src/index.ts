@@ -3,11 +3,14 @@ export type { InventoryOptions } from "./components/Inventory";
 
 export {
   DEFAULT_STORAGE_KEY,
+  ITEM_SELECTOR,
   addEntry,
   isInventoryEntry,
+  itemNameFromBlock,
   parseInventory,
   removeEntry,
   serializeInventory,
+  slugify,
   sortInventory,
   toggleEntry,
 } from "./lib/inventory";

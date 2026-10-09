@@ -1,24 +1,37 @@
 /**
  * Browser runtime for the Inventory component.
  *
- * Runs after DOMContentLoaded inside a <script> tag (bundled to a plain string by
- * the inline-script-loader), so it must be dependency-free and side-effect driven.
+ * Runs inside a <script> tag after DOMContentLoaded (bundled to a plain JS
+ * string by the inline-script-loader), so it is side-effect driven.
+ *
+ * Items are marked in Obsidian with an ```item fence, which rehype-pretty-code
+ * renders as:
+ *   <figure data-rehype-pretty-code-figure>
+ *     <pre data-language="item" ...><code ...>Item name</code></pre>
+ *   </figure>
+ * Every such block is a stowable item; the first non-empty line of the block is
+ * its name. Ids/anchors are derived from the slugified name so entries survive
+ * renames of unrelated pages.
  *
  * Storage layout (localStorage):
- *   quartz:inventory -> InventoryEntry[] = { slug, title, addedAt, tags?, excerpt? }
+ *   quartz:inventory      -> InventoryEntry[] = { slug, title, page, anchor, addedAt }
  *   quartz:inventory:open -> "1" | "0"  (panel open/closed state)
  */
 
-const STORAGE_KEY_FALLBACK = "quartz:inventory";
-const OPEN_KEY_SUFFIX = ":open";
+import {
+  ITEM_SELECTOR,
+  addEntry,
+  itemNameFromBlock,
+  parseInventory,
+  removeEntry,
+  serializeInventory,
+  slugify,
+  sortInventory,
+  toggleEntry,
+  type InventoryEntry,
+} from "../../lib/inventory.ts";
 
-interface Entry {
-  slug: string;
-  title: string;
-  addedAt: string;
-  tags?: string[];
-  excerpt?: string;
-}
+const OPEN_KEY_SUFFIX = ":open";
 
 function read(key: string): string | null {
   try {
@@ -36,79 +49,119 @@ function write(key: string, value: string): void {
   }
 }
 
-function parse(raw: string | null): Entry[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e): e is Entry =>
-        typeof e === "object" &&
-        e !== null &&
-        typeof (e as Entry).slug === "string" &&
-        typeof (e as Entry).title === "string" &&
-        typeof (e as Entry).addedAt === "string",
-    );
-  } catch {
-    return [];
-  }
-}
-
-function newestFirst(entries: Entry[]): Entry[] {
-  return entries.slice().sort((a, b) => b.addedAt.localeCompare(a.addedAt));
-}
-
-/** Derive the note slug from the current location, without leading/trailing slash. */
-function currentSlug(): string {
+/** Note slug of the current page, without leading/trailing slash. */
+function currentPage(): string {
   const parts = location.pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return "index";
-  // Quartz slugifies non-ASCII, so decode to get the original filename back
-  return decodeURIComponent(parts[parts.length - 1] ?? "index");
+  const last = parts[parts.length - 1];
+  if (!last) return "index";
+  return decodeURIComponent(last);
 }
 
-function pageTitle(slug: string): string {
-  const el = document.querySelector("h1");
-  const text = el?.textContent?.trim();
-  if (text) return text;
-  return slug
-    .split("-")
-    .filter(Boolean)
-    .map((w) => (w[0] ?? "").toUpperCase() + w.slice(1))
-    .join(" ");
+/**
+ * Item blocks on this page. Both the <pre> and the nested <code> carry
+ * `data-language="item"`, so keep only the outermost match of each block and
+ * never descend into an already-matched element.
+ */
+function itemBlocks(): HTMLElement[] {
+  const blocks: HTMLElement[] = [];
+
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(ITEM_SELECTOR))) {
+    // Skip anything nested inside an already collected block.
+    if (el.parentElement?.closest(ITEM_SELECTOR)) continue;
+    blocks.push(el);
+  }
+
+  return blocks;
 }
 
-function pageTags(): string[] | undefined {
-  const tags = Array.from(
-    document.querySelectorAll<HTMLElement>(".page-tags .tag, .tags a.tag"),
-  )
-    .map((el) => el.textContent?.trim() ?? "")
-    .filter(Boolean);
-  return tags.length > 0 ? tags : undefined;
+interface DiscoveredItem {
+  el: HTMLElement;
+  title: string;
+  slug: string;
+  anchor: string;
 }
 
-function pageExcerpt(): string | undefined {
-  const el = document.querySelector<HTMLElement>(".page-content p, article p");
-  const text = el?.textContent?.trim();
-  if (!text) return undefined;
-  return text.length > 180 ? text.slice(0, 180) + "\u2026" : text;
+function discoverItems(): DiscoveredItem[] {
+  const page = currentPage();
+  const items: DiscoveredItem[] = [];
+  const used = new Map<string, number>();
+
+  for (const el of itemBlocks()) {
+    const title = itemNameFromBlock(el.textContent);
+    if (!title) continue;
+
+    const base = slugify(title) || "item";
+    // De-duplicate anchors when a page repeats the same item name.
+    const seen = used.get(base) ?? 0;
+    used.set(base, seen + 1);
+    const anchor = seen === 0 ? base : `${base}-${seen}`;
+    const slug = `${page}#${anchor}`;
+
+    el.setAttribute("data-inventory-item", anchor);
+    el.classList.add("inventory-item-block");
+
+    items.push({ el, title, slug, anchor });
+  }
+
+  return items;
 }
 
-function setBadge(root: HTMLElement, count: number): void {
+function entryFor(item: DiscoveredItem): InventoryEntry {
+  return {
+    slug: item.slug,
+    title: item.title,
+    page: currentPage(),
+    anchor: item.anchor,
+    addedAt: new Date().toISOString(),
+  };
+}
+
+/** Per-item toggle button, injected into the figure wrapping the item block. */
+function mountItemButton(root: HTMLElement, item: DiscoveredItem, storageKey: string) {
+  if (item.el.querySelector("[data-inventory-item-toggle]")) return;
+
+  const figure = item.el.closest("figure") ?? item.el;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "inventory-item-toggle";
+  button.setAttribute("data-inventory-item-toggle", item.slug);
+  button.setAttribute("aria-label", `Stash ${item.title} in your inventory`);
+
+  const sync = (entries: InventoryEntry[]) => {
+    const stashed = entries.some((e) => e.slug === item.slug);
+    button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
+    button.setAttribute("aria-pressed", String(stashed));
+    button.classList.toggle("is-stashed", stashed);
+  };
+
+  sync(parseInventory(read(storageKey)));
+
+  button.addEventListener("click", () => {
+    const next = toggleEntry(parseInventory(read(storageKey)), entryFor(item));
+    write(storageKey, serializeInventory(next));
+    sync(next);
+    render(root, next);
+  });
+
+  figure.appendChild(button);
+}
+
+function setBadge(root: HTMLElement, count: number) {
   const badge = root.querySelector<HTMLElement>("[data-inventory-count]");
   if (badge) badge.textContent = String(count);
 }
 
-function render(root: HTMLElement, entries: Entry[]): void {
+function render(root: HTMLElement, entries: InventoryEntry[]) {
   const list = root.querySelector<HTMLElement>("[data-inventory-items]");
   const empty = root.querySelector<HTMLElement>("[data-inventory-empty]");
   const clear = root.querySelector<HTMLElement>("[data-inventory-clear]");
-  const toggle = root.querySelector<HTMLElement>("[data-inventory-toggle]");
   const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
+  const toggle = root.querySelector<HTMLElement>("[data-inventory-toggle]");
 
   setBadge(root, entries.length);
 
-  if (toggle) {
-    toggle.setAttribute("aria-expanded", String(panel ? !panel.hasAttribute("hidden") : false));
+  if (toggle && panel) {
+    toggle.setAttribute("aria-expanded", String(!panel.hasAttribute("hidden")));
   }
 
   if (empty) empty.toggleAttribute("hidden", entries.length > 0);
@@ -117,16 +170,14 @@ function render(root: HTMLElement, entries: Entry[]): void {
 
   list.textContent = "";
 
-  const slug = currentSlug();
-  for (const entry of newestFirst(entries)) {
+  for (const entry of sortInventory(entries)) {
     const li = document.createElement("li");
-    li.className = "inventory-item";
+    li.className = "inventory-entry";
     li.setAttribute("data-inventory-slug", entry.slug);
-    if (entry.slug === slug) li.classList.add("is-current");
 
     const link = document.createElement("a");
     link.className = "inventory-link";
-    link.href = entry.slug === "index" ? "/" : `/${entry.slug}`;
+    link.href = entry.page === "index" ? `/#${entry.anchor}` : `/${entry.page}#${entry.anchor}`;
     link.textContent = entry.title;
 
     const meta = document.createElement("span");
@@ -145,65 +196,30 @@ function render(root: HTMLElement, entries: Entry[]): void {
   }
 }
 
-/** Inject a stash button into the article header of the current note. */
-function mountStashButton(root: HTMLElement, storageKey: string): void {
-  const slug = currentSlug();
-  const content = document.querySelector<HTMLElement>(".page-content, article");
-  if (!content) return;
-  if (document.querySelector("[data-inventory-stash]")) return;
-
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "inventory-stash";
-  button.setAttribute("data-inventory-stash", slug);
-
-  const syncLabel = (entries: Entry[]) => {
-    const stashed = entries.some((e) => e.slug === slug);
+/** Keep every item button on the page in sync with stored state. */
+function refreshItemButtons(entries: InventoryEntry[]) {
+  for (const button of Array.from(
+    document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
+  )) {
+    const slug = button.getAttribute("data-inventory-item-toggle");
+    const stashed = slug != null && entries.some((e) => e.slug === slug);
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
-  };
-
-  syncLabel(parse(read(storageKey)));
-
-  button.addEventListener("click", () => {
-    const entries = parse(read(storageKey));
-    const tags = pageTags();
-    const excerpt = pageExcerpt();
-    const entry: Entry = {
-      slug,
-      title: pageTitle(slug),
-      addedAt: new Date().toISOString(),
-    };
-    if (tags) entry.tags = tags;
-    if (excerpt) entry.excerpt = excerpt;
-
-    const stashed = entries.some((e) => e.slug === slug);
-    const next = stashed
-      ? entries.filter((e) => e.slug !== slug)
-      : newestFirst([entry, ...entries.filter((e) => e.slug !== slug)]);
-
-    write(storageKey, JSON.stringify(next, null, 2));
-    syncLabel(next);
-    render(root, next);
-  });
-
-  content.prepend(button);
+  }
 }
 
-function init(): void {
-  const roots = document.querySelectorAll<HTMLElement>("[data-inventory]");
-  for (const root of roots) {
-    const storageKey = root.getAttribute("data-inventory-key") ?? STORAGE_KEY_FALLBACK;
+function init() {
+  for (const root of Array.from(document.querySelectorAll<HTMLElement>("[data-inventory]"))) {
+    const storageKey = root.getAttribute("data-inventory-key") ?? "quartz:inventory";
     const openKey = storageKey + OPEN_KEY_SUFFIX;
-
-    let entries = parse(read(storageKey));
     const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
 
     const setOpen = (open: boolean) => {
       if (panel) panel.toggleAttribute("hidden", !open);
-      const toggle = root.querySelector<HTMLElement>("[data-inventory-toggle]");
-      toggle?.setAttribute("aria-expanded", String(open));
+      root
+        .querySelector<HTMLElement>("[data-inventory-toggle]")
+        ?.setAttribute("aria-expanded", String(open));
       write(openKey, open ? "1" : "0");
     };
 
@@ -216,25 +232,30 @@ function init(): void {
     root
       .querySelector<HTMLElement>("[data-inventory-clear]")
       ?.addEventListener("click", () => {
-        entries = [];
-        write(storageKey, JSON.stringify(entries));
-        render(root, entries);
+        const next: InventoryEntry[] = [];
+        write(storageKey, serializeInventory(next));
+        render(root, next);
+        refreshItemButtons(next);
       });
 
     root.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement | null;
-      const slug = target?.getAttribute?.("data-inventory-remove");
+      const slug = (event.target as HTMLElement | null)?.getAttribute?.("data-inventory-remove");
       if (!slug) return;
       event.preventDefault();
-      entries = entries.filter((e) => e.slug !== slug);
-      write(storageKey, JSON.stringify(entries, null, 2));
-      render(root, entries);
+      const next = removeEntry(parseInventory(read(storageKey)), slug);
+      write(storageKey, serializeInventory(next));
+      render(root, next);
+      refreshItemButtons(next);
     });
 
     if (read(openKey) === "1") setOpen(true);
 
+    const entries = parseInventory(read(storageKey));
     render(root, entries);
-    mountStashButton(root, storageKey);
+
+    for (const item of discoverItems()) {
+      mountItemButton(root, item, storageKey);
+    }
   }
 }
 
