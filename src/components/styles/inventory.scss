@@ -1,0 +1,176 @@
+// Inventory component styles (Quartz v5 plugin, SCSS compiled to a CSS string)
+
+$inv-bg: var(--light, #fff);
+$inv-fg: var(--dark, #1f1f1f);
+$inv-border: color-mix(in srgb, var(--secondary, #6b6b6b) 35%, transparent);
+$inv-accent: var(--linkColor, #0b6bcb);
+
+.inventory {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: $inv-fg;
+
+  .inventory-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: $inv-bg;
+    border: 1px solid $inv-border;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    transition: background 0.15s ease, border-color 0.15s ease;
+
+    &:hover {
+      border-color: $inv-accent;
+    }
+
+    &[aria-expanded="true"] {
+      border-color: $inv-accent;
+    }
+  }
+
+  .inventory-icon {
+    line-height: 1;
+  }
+
+  .inventory-label {
+    flex: 1;
+    text-align: left;
+    font-weight: 600;
+  }
+
+  .inventory-count {
+    min-width: 1.5rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: $inv-accent;
+    color: #fff;
+    font-size: 0.75rem;
+    line-height: 1.4rem;
+    text-align: center;
+  }
+
+  .inventory-panel {
+    padding: 0.25rem 0.15rem;
+  }
+
+  .inventory-empty {
+    margin: 0.25rem 0;
+    opacity: 0.7;
+    font-style: italic;
+  }
+
+  .inventory-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .inventory-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: 0.35rem;
+
+    &:hover {
+      background: color-mix(in srgb, $inv-accent 10%, transparent);
+    }
+
+    &.is-current .inventory-link {
+      font-weight: 700;
+    }
+  }
+
+  .inventory-link {
+    flex: 1;
+    color: $inv-accent;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  .inventory-meta {
+    font-size: 0.72rem;
+    opacity: 0.6;
+    white-space: nowrap;
+  }
+
+  .inventory-remove {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    opacity: 0.5;
+
+    &:hover {
+      opacity: 1;
+      color: #c0392b;
+    }
+  }
+
+  .inventory-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+  }
+
+  .inventory-clear {
+    border: 1px solid $inv-border;
+    background: transparent;
+    color: inherit;
+    border-radius: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+
+    &:hover {
+      border-color: #c0392b;
+      color: #c0392b;
+    }
+  }
+}
+
+// Stash button injected at the top of the article body by the inline script.
+.inventory-stash {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid $inv-border;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+
+  &:hover {
+    opacity: 1;
+    border-color: $inv-accent;
+    color: $inv-accent;
+  }
+
+  &.is-stashed {
+    border-color: $inv-accent;
+    color: $inv-accent;
+    opacity: 1;
+  }
+}

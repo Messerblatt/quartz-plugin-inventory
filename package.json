@@ -1,0 +1,96 @@
+{
+  "name": "@quartz-community/plugin-inventory",
+  "version": "0.1.0",
+  "description": "Inventory plugin for Quartz v5: collect notes into a localStorage-backed backpack.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "quartz",
+    "quartz-plugin",
+    "digital-garden",
+    "obsidian",
+    "inventory"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./components": {
+      "types": "./dist/components/index.d.ts",
+      "import": "./dist/components/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "preact": "^10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "preact": {
+      "optional": false
+    }
+  },
+  "dependencies": {
+    "@quartz-community/types": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "esbuild": "^0.25.0",
+    "preact": "^10.28.2",
+    "sass": "^1.97.3",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3"
+  },
+  "quartz": {
+    "name": "inventory",
+    "displayName": "Inventory",
+    "category": "component",
+    "version": "0.1.0",
+    "quartzVersion": ">=5.0.0",
+    "dependencies": [],
+    "defaultOrder": 60,
+    "defaultEnabled": true,
+    "defaultOptions": {
+      "storageKey": "quartz:inventory",
+      "title": "Inventory"
+    },
+    "optionSchema": {
+      "storageKey": {
+        "type": "string",
+        "description": "localStorage key used to persist the inventory."
+      },
+      "title": {
+        "type": "string",
+        "description": "Label shown on the inventory toggle button."
+      }
+    },
+    "components": {
+      "Inventory": {
+        "displayName": "Inventory",
+        "defaultPosition": "right",
+        "defaultPriority": 60
+      }
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
