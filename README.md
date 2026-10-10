@@ -8,14 +8,18 @@ notes into a persistent, `localStorage`-backed backpack.
 
 - Per-note **"+ Stash" / "✓ Stashed"** button injected into the article body.
   Stashing blanks the item's text, so the source page stays clean.
+- Any fenced block whose language is a known category is stowable: ` ```item `
+  (default), plus ` ```event ` and ` ```secret `. The category is stored with the
+  entry and shown as a tag next to it.
 - A collapsible **Inventory** panel (right sidebar by default) with a count badge.
 - A **"Show all"** button that opens a modal with the full inventory — themed via
   Quartz CSS variables, closes on backdrop click, `Esc` or the × button.
 - Entries persist across pages, reloads and builds — they live in the reader's
   browser only, never on the server.
 - Remove single entries, or clear the whole inventory from the modal.
-- Item links reproduce the exact page URL they were stashed from, so they keep
-  working with nested paths (`/notes/gear/`) and trailing slashes.
+- Entries render as plain text (no links); names longer than 20 characters are
+  shown as the first 20 characters plus `…`, with the full name in the `title`
+  tooltip. The stored title is never truncated.
 - Pure CSS, respects `prefers-color-scheme` via Quartz CSS variables.
 
 ## Install
@@ -60,13 +64,20 @@ Inventory({
     "title": "Diesel",
     "page": "notes/gear/",
     "anchor": "diesel",
-    "addedAt": "2026-10-09T19:10:20.029Z"
+    "addedAt": "2026-10-09T19:10:20.029Z",
+    "category": "item"
   }
 ]
 ```
 
-`page` is the page path as the browser sees it (no leading slash), so
-`/${page}#${anchor}` rebuilds a working link.
+`page` is the page path as the browser sees it (no leading slash).
+`category` is the fence language (`item`, `event`, `secret`); entries written
+before categories existed are read back as `item`.
+
+### Categories
+
+`ITEM_CATEGORIES` lists the stowable fence languages; add one there to make a
+new kind of block stashable, and it is stored and rendered automatically.
 
 Pure helpers for this format live in `src/lib/inventory.ts` and are exported:
 
@@ -78,6 +89,7 @@ import {
   serializeInventory,
   sortInventory,
   toggleEntry,
+  truncateTitle,
 } from "@quartz-community/plugin-inventory";
 ```
 

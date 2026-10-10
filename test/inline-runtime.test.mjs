@@ -93,7 +93,7 @@ check("entry page recorded", stored[0]?.page === "gear", stored[0]?.page);
 check("count badge updated", doc.querySelector("[data-inventory-count]").textContent === "1", doc.querySelector("[data-inventory-count]").textContent);
 check("toggle flips to stashed", /\u2713 Stashed/.test(doc.querySelectorAll("[data-inventory-item-toggle]")[0].textContent));
 check("entry rendered in panel", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1, `${doc.querySelectorAll("[data-inventory-items] .inventory-entry").length}`);
-check("link points back to anchor", doc.querySelector(".inventory-link").getAttribute("href") === "/gear#brille", doc.querySelector(".inventory-link")?.getAttribute("href"));
+check("entry text is the item name", doc.querySelector("[data-inventory-items] .inventory-name").textContent === "Brille", doc.querySelector("[data-inventory-items] .inventory-name").textContent);
 check("empty hint hidden", doc.querySelector("[data-inventory-empty]").hasAttribute("hidden") === true);
 
 // Toggle the same item again -> unstash.
@@ -178,21 +178,16 @@ check("clear empties the inventory", JSON.parse(store.getItem("quartz:inventory"
 check("clear closes the modal", modal.hasAttribute("hidden") === true);
 check("'Show all' hidden when empty", doc.querySelector("[data-inventory-show-all]").hasAttribute("hidden") === true);
 
-// --- Entry URLs -----------------------------------------------------------
-// Quartz serves both `gear` and `notes/gear/` style URLs; links must reproduce
-// the exact path the item was stashed from, otherwise they 404.
+// --- Page paths -----------------------------------------------------------
+// Quartz serves both `gear` and `notes/gear/` style URLs; the page must be
+// recorded verbatim so the stored slug round-trips.
 const urlDom = new JSDOM(page, { url: "https://example.com/notes/gear/", runScripts: "outside-only" });
 urlDom.window.eval(code);
 await new Promise((r) => setTimeout(r, 0));
 const uDoc = urlDom.window.document;
 uDoc.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new urlDom.window.MouseEvent("click", { bubbles: true }));
 check(
-  "nested/trailing-slash page URL is preserved",
-  uDoc.querySelector(".inventory-link").getAttribute("href") === "/notes/gear/#brille",
-  uDoc.querySelector(".inventory-link").getAttribute("href"),
-);
-check(
-  "entry page recorded verbatim",
+  "nested/trailing-slash page recorded verbatim",
   JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page === "notes/gear/",
   JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page,
 );
@@ -202,10 +197,51 @@ idxDom.window.eval(code);
 await new Promise((r) => setTimeout(r, 0));
 idxDom.window.document.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new idxDom.window.MouseEvent("click", { bubbles: true }));
 check(
-  "index page links to site root",
-  idxDom.window.document.querySelector(".inventory-link").getAttribute("href") === "/#brille",
-  idxDom.window.document.querySelector(".inventory-link").getAttribute("href"),
+  "index page recorded as index",
+  JSON.parse(idxDom.window.localStorage.getItem("quartz:inventory"))[0]?.page === "index",
+  JSON.parse(idxDom.window.localStorage.getItem("quartz:inventory"))[0]?.page,
 );
+
+// --- Plain text entries ---------------------------------------------------
+check("entries are plain text, not links", doc.querySelectorAll("[data-inventory-items] a").length === 0);
+
+// --- Categories -----------------------------------------------------------
+const longName = "Lorem Ipsum ladada blablaba domi con fore concordia london big ben dollar";
+const catDom = new JSDOM(
+  page
+    .replace(/<figure[\s\S]*?<\/figure>/g, "")
+    .replace(
+      '<div class="page-content">',
+      `<div class="page-content">
+        <figure><pre data-language="item"><code data-language="item"><span data-line><span>${longName}</span></span></code></pre></figure>
+        <figure><pre data-language="secret"><code data-language="secret"><span data-line><span>Hidden Vault</span></span></code></pre></figure>`,
+    ),
+  { url: "https://example.com/gear", runScripts: "outside-only" },
+);
+catDom.window.eval(code);
+await new Promise((r) => setTimeout(r, 0));
+const cDoc = catDom.window.document;
+const catToggles = cDoc.querySelectorAll("[data-inventory-item-toggle]");
+check("blocks of every known category get a button", catToggles.length === 2, `${catToggles.length}`);
+[...catToggles].forEach((b) => b.dispatchEvent(new catDom.window.MouseEvent("click", { bubbles: true })));
+const catEntries = JSON.parse(catDom.window.localStorage.getItem("quartz:inventory"));
+check("item fence stored as category 'item'", catEntries.find((e) => e.title === longName)?.category === "item", JSON.stringify(catEntries.map((e) => [e.title, e.category])));
+check("secret fence stored as category 'secret'", catEntries.find((e) => e.title === "Hidden Vault")?.category === "secret", JSON.stringify(catEntries.map((e) => [e.title, e.category])));
+check("full title stored, not truncated", catEntries.find((e) => e.title === longName)?.title === longName);
+const cNames = [...cDoc.querySelectorAll("[data-inventory-items] .inventory-name")];
+const cLong = cNames.find((n) => n.getAttribute("title") === longName);
+check("long title is elided in the preview (20 chars + ...)", cLong?.textContent === "Lorem Ipsum ladada b...", cLong?.textContent);
+check("short titles are not elided", [...cDoc.querySelectorAll("[data-inventory-items] .inventory-name")].some((n) => n.textContent === "Hidden Vault"));
+check("entries show their category", [...cDoc.querySelectorAll("[data-inventory-items] .inventory-tag")].map((t) => t.textContent).sort().join(",") === "item,secret");
+check("legacy entries without a category load as 'item'", await (async () => {
+  const legacy = new JSDOM(page, { url: "https://example.com/gear", runScripts: "outside-only" });
+  legacy.window.localStorage.setItem("quartz:inventory", JSON.stringify([
+    { slug: "gear#old", title: "Old Entry", page: "gear", anchor: "old", addedAt: "2020-01-01T00:00:00.000Z" },
+  ]));
+  legacy.window.eval(code);
+  await new Promise((r) => setTimeout(r, 0));
+  return legacy.window.document.querySelector(".inventory-tag")?.textContent === "item";
+})());
 
 console.log(results.join("\n"));
 process.exit(results.some((r) => r.startsWith("FAIL")) ? 1 : 0);

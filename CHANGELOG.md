@@ -11,6 +11,11 @@
   containing the full inventory (with a Clear button inside).
 - Item links now reproduce the exact page path they were stashed from, fixing
   404s for nested pages and trailing-slash URLs.
+- Inventory entries render as plain text instead of links, and names longer than
+  20 characters are elided (`Lorem Ipsum ladada b…`) with the full title kept in
+  the tooltip. Stored titles stay untouched.
+- Entries now carry a `category` taken from the fence language, so ` ```event `
+  and ` ```secret ` blocks are stowable too (see `ITEM_CATEGORIES`).
 
 ## 0.1.0
 

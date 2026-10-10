@@ -19,9 +19,11 @@
  */
 
 import {
+  DEFAULT_CATEGORY,
   DEFAULT_STORAGE_KEY,
   ITEM_SELECTOR,
   addEntry,
+  isItemCategory,
   itemNameFromBlock,
   parseInventory,
   removeEntry,
@@ -29,7 +31,9 @@ import {
   slugify,
   sortInventory,
   toggleEntry,
+  truncateTitle,
   type InventoryEntry,
+  type ItemCategory,
 } from "../../lib/inventory.ts";
 
 const OPEN_KEY_SUFFIX = ":open";
@@ -63,10 +67,10 @@ function currentPage(): string {
   return path;
 }
 
-/** Link back to the page an item was stashed from. */
-function entryHref(entry: InventoryEntry): string {
-  const base = entry.page === "index" ? "/" : `/${entry.page.replace(/^\/+/, "")}`;
-  return `${base}#${entry.anchor}`;
+/** Fence language of a block, i.e. the category it belongs to. */
+function blockCategory(el: HTMLElement): ItemCategory {
+  const language = el.getAttribute("data-language");
+  return isItemCategory(language) ? language : DEFAULT_CATEGORY;
 }
 
 /** Storage key of the (first) inventory panel on the page, or the default. */
@@ -99,6 +103,7 @@ interface DiscoveredItem {
   title: string;
   slug: string;
   anchor: string;
+  category: ItemCategory;
 }
 
 /**
@@ -139,6 +144,8 @@ function discoverItems(): DiscoveredItem[] {
 
   for (const el of itemBlocks()) {
     markBlankLines(el);
+    // ```item is the default; ```event / ```secret and friends get their own.
+    const category = blockCategory(el);
 
     // Prefer the rendered text; fall back to the title captured on a previous
     // run so a block whose text is hidden (stashed) still gets its button.
@@ -154,9 +161,11 @@ function discoverItems(): DiscoveredItem[] {
 
     el.setAttribute("data-inventory-item", anchor);
     el.setAttribute(ITEM_TITLE_ATTR, title);
+    el.setAttribute("data-inventory-category", category);
     el.classList.add("inventory-item-block");
+    el.classList.add(`inventory-item-block--${category}`);
 
-    items.push({ el, title, slug, anchor });
+    items.push({ el, title, slug, anchor, category });
   }
 
   return items;
@@ -169,6 +178,7 @@ function entryFor(item: DiscoveredItem): InventoryEntry {
     page: currentPage(),
     anchor: item.anchor,
     addedAt: new Date().toISOString(),
+    category: item.category,
   };
 }
 
@@ -253,11 +263,22 @@ function fillList(list: HTMLElement, entries: InventoryEntry[]) {
     const li = document.createElement("li");
     li.className = "inventory-entry";
     li.setAttribute("data-inventory-slug", entry.slug);
+    li.setAttribute("data-inventory-category", entry.category);
 
-    const link = document.createElement("a");
-    link.className = "inventory-link";
-    link.href = entryHref(entry);
-    link.textContent = entry.title;
+    // Plain text, not a link: the entry keeps the full title, the preview is
+    // shortened so a long item name cannot blow up the panel or the modal.
+    const name = document.createElement("span");
+    name.className = "inventory-name";
+    name.textContent = truncateTitle(entry.title);
+    // Full title available on hover / to assistive tech.
+    name.title = entry.title;
+    if (truncateTitle(entry.title) !== entry.title.trim()) {
+      name.setAttribute("aria-label", entry.title);
+    }
+
+    const category = document.createElement("span");
+    category.className = "inventory-tag";
+    category.textContent = entry.category;
 
     const meta = document.createElement("span");
     meta.className = "inventory-meta";
@@ -270,7 +291,7 @@ function fillList(list: HTMLElement, entries: InventoryEntry[]) {
     remove.setAttribute("aria-label", `Remove ${entry.title} from inventory`);
     remove.textContent = "\u00d7";
 
-    li.append(link, meta, remove);
+    li.append(name, category, meta, remove);
     list.append(li);
   }
 }

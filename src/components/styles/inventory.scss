@@ -87,14 +87,23 @@ $inv-accent: var(--linkColor, #0b6bcb);
     }
   }
 
-  .inventory-link {
+  .inventory-name {
     flex: 1;
-    color: $inv-accent;
-    text-decoration: none;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-    &:hover {
-      text-decoration: underline;
-    }
+  .inventory-tag {
+    flex: none;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid $inv-border;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    letter-spacing: 0.03em;
+    text-transform: lowercase;
+    opacity: 0.75;
   }
 
   .inventory-meta {
