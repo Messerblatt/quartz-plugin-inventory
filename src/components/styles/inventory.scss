@@ -153,9 +153,16 @@ figure:has(> pre[data-language="item"]) {
 .inventory-item-block {
   font-style: italic;
 
-  // The item name is the payload; drop the trailing blank lines the fence
-  // leaves behind so the block reads as a single line.
-  span[data-line]:last-child {
+  // The fence's leading/trailing newline render as empty `span[data-line]`
+  // elements. They are tagged at runtime, so a one-line fence whose only line
+  // is the item name keeps rendering its text.
+  .is-blank-line {
+    display: none;
+  }
+
+  // A stashed item keeps its block (so the anchor still resolves) but shows no
+  // text at all - the name now lives in the inventory panel only.
+  &.is-stashed-item span[data-line] {
     display: none;
   }
 }

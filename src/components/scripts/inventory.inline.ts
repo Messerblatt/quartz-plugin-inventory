@@ -19,6 +19,7 @@
  */
 
 import {
+  DEFAULT_STORAGE_KEY,
   ITEM_SELECTOR,
   addEntry,
   itemNameFromBlock,
@@ -32,6 +33,8 @@ import {
 } from "../../lib/inventory.ts";
 
 const OPEN_KEY_SUFFIX = ":open";
+const ROOT_SELECTOR = "[data-inventory]";
+const ITEM_TITLE_ATTR = "data-inventory-item-title";
 
 function read(key: string): string | null {
   try {
@@ -55,6 +58,14 @@ function currentPage(): string {
   const last = parts[parts.length - 1];
   if (!last) return "index";
   return decodeURIComponent(last);
+}
+
+/** Storage key of the (first) inventory panel on the page, or the default. */
+function storageKeyFor(doc: Document = document): string {
+  return (
+    doc.querySelector<HTMLElement>(ROOT_SELECTOR)?.getAttribute("data-inventory-key") ??
+    DEFAULT_STORAGE_KEY
+  );
 }
 
 /**
@@ -81,13 +92,48 @@ interface DiscoveredItem {
   anchor: string;
 }
 
+/**
+ * Tag blank rendered lines so CSS can drop them. rehype-pretty-code wraps every
+ * line in `span[data-line]`, and the fence's leading/trailing newline shows up
+ * as an empty line around the item name. Without this, a one-line fence whose
+ * only span *is* the name would be hidden by a `:last-child` rule and render
+ * as an empty block.
+ */
+function markBlankLines(el: HTMLElement) {
+  for (const line of Array.from(el.querySelectorAll<HTMLElement>("span[data-line]"))) {
+    line.classList.toggle("is-blank-line", line.textContent?.trim() === "");
+  }
+}
+
+/**
+ * The item name, read from the rendered lines only. rehype-pretty-code injects
+ * a "copy source" clipboard button into the block, so the block's raw
+ * textContent would otherwise start with the button's label instead of the
+ * item name.
+ */
+function itemTitle(el: HTMLElement): string {
+  const lines = el.querySelectorAll<HTMLElement>("span[data-line]");
+  if (lines.length > 0) {
+    for (const line of Array.from(lines)) {
+      const name = itemNameFromBlock(line.textContent);
+      if (name) return name;
+    }
+    return "";
+  }
+  return itemNameFromBlock(el.textContent);
+}
+
 function discoverItems(): DiscoveredItem[] {
   const page = currentPage();
   const items: DiscoveredItem[] = [];
   const used = new Map<string, number>();
 
   for (const el of itemBlocks()) {
-    const title = itemNameFromBlock(el.textContent);
+    markBlankLines(el);
+
+    // Prefer the rendered text; fall back to the title captured on a previous
+    // run so a block whose text is hidden (stashed) still gets its button.
+    const title = itemTitle(el) || el.getAttribute(ITEM_TITLE_ATTR) || "";
     if (!title) continue;
 
     const base = slugify(title) || "item";
@@ -98,6 +144,7 @@ function discoverItems(): DiscoveredItem[] {
     const slug = `${page}#${anchor}`;
 
     el.setAttribute("data-inventory-item", anchor);
+    el.setAttribute(ITEM_TITLE_ATTR, title);
     el.classList.add("inventory-item-block");
 
     items.push({ el, title, slug, anchor });
@@ -117,10 +164,16 @@ function entryFor(item: DiscoveredItem): InventoryEntry {
 }
 
 /** Per-item toggle button, injected into the figure wrapping the item block. */
-function mountItemButton(root: HTMLElement, item: DiscoveredItem, storageKey: string) {
-  if (item.el.querySelector("[data-inventory-item-toggle]")) return;
-
+function mountItemButton(item: DiscoveredItem, storageKey: string) {
   const figure = item.el.closest("figure") ?? item.el;
+  // The button lives on the figure, not inside the block, so guard on it (or on
+  // the block itself) - otherwise every re-run would stack up another button.
+  const existing = figure.querySelector<HTMLElement>("[data-inventory-item-toggle]");
+  if (existing) {
+    if (existing.getAttribute("data-inventory-item-toggle") === item.slug) return;
+    existing.remove();
+  }
+
   const button = document.createElement("button");
   button.type = "button";
   button.className = "inventory-item-toggle";
@@ -132,6 +185,8 @@ function mountItemButton(root: HTMLElement, item: DiscoveredItem, storageKey: st
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
+    // A stashed item keeps its block (and anchor) but shows no text.
+    item.el.classList.toggle("is-stashed-item", stashed);
   };
 
   sync(parseInventory(read(storageKey)));
@@ -139,8 +194,7 @@ function mountItemButton(root: HTMLElement, item: DiscoveredItem, storageKey: st
   button.addEventListener("click", () => {
     const next = toggleEntry(parseInventory(read(storageKey)), entryFor(item));
     write(storageKey, serializeInventory(next));
-    sync(next);
-    render(root, next);
+    syncAll(next);
   });
 
   figure.appendChild(button);
@@ -196,71 +250,139 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
   }
 }
 
-/** Keep every item button on the page in sync with stored state. */
+/** Keep every item button (and its block) on the page in sync with stored state. */
 function refreshItemButtons(entries: InventoryEntry[]) {
+  const isStashed = (slug: string | null) =>
+    slug != null && entries.some((e) => e.slug === slug);
+
   for (const button of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
   )) {
-    const slug = button.getAttribute("data-inventory-item-toggle");
-    const stashed = slug != null && entries.some((e) => e.slug === slug);
+    const stashed = isStashed(button.getAttribute("data-inventory-item-toggle"));
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
   }
+
+  // Drive the blocks from their slug (page#anchor) rather than by DOM position,
+  // so panels-only updates work even when the block was mounted elsewhere.
+  const page = currentPage();
+  for (const el of Array.from(
+    document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
+  )) {
+    const anchor = el.getAttribute("data-inventory-item");
+    el.classList.toggle("is-stashed-item", anchor != null && isStashed(`${page}#${anchor}`));
+  }
+}
+
+/** Re-render every panel and every item button from `entries`. */
+function syncAll(entries: InventoryEntry[]) {
+  for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
+    render(root, entries);
+  }
+  refreshItemButtons(entries);
+}
+
+/** Discover item blocks and mount their toggle buttons. Idempotent. */
+function mountItems() {
+  const storageKey = storageKeyFor();
+  for (const item of discoverItems()) {
+    mountItemButton(item, storageKey);
+  }
+  refreshItemButtons(parseInventory(read(storageKey)));
+}
+
+function initRoot(root: HTMLElement) {
+  // `init` runs again after client-side navigation; never double-bind.
+  if (root.hasAttribute("data-inventory-ready")) return;
+  root.setAttribute("data-inventory-ready", "");
+
+  const storageKey = root.getAttribute("data-inventory-key") ?? DEFAULT_STORAGE_KEY;
+  const openKey = storageKey + OPEN_KEY_SUFFIX;
+  const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
+
+  const setOpen = (open: boolean) => {
+    if (panel) panel.toggleAttribute("hidden", !open);
+    root
+      .querySelector<HTMLElement>("[data-inventory-toggle]")
+      ?.setAttribute("aria-expanded", String(open));
+    write(openKey, open ? "1" : "0");
+  };
+
+  root
+    .querySelector<HTMLElement>("[data-inventory-toggle]")
+    ?.addEventListener("click", () => {
+      setOpen(panel ? panel.hasAttribute("hidden") : true);
+    });
+
+  root
+    .querySelector<HTMLElement>("[data-inventory-clear]")
+    ?.addEventListener("click", () => {
+      const next: InventoryEntry[] = [];
+      write(storageKey, serializeInventory(next));
+      syncAll(next);
+    });
+
+  root.addEventListener("click", (event) => {
+    const slug = (event.target as HTMLElement | null)?.getAttribute?.("data-inventory-remove");
+    if (!slug) return;
+    event.preventDefault();
+    const next = removeEntry(parseInventory(read(storageKey)), slug);
+    write(storageKey, serializeInventory(next));
+    syncAll(next);
+  });
+
+  if (read(openKey) === "1") setOpen(true);
+  render(root, parseInventory(read(storageKey)));
 }
 
 function init() {
-  for (const root of Array.from(document.querySelectorAll<HTMLElement>("[data-inventory]"))) {
-    const storageKey = root.getAttribute("data-inventory-key") ?? "quartz:inventory";
-    const openKey = storageKey + OPEN_KEY_SUFFIX;
-    const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
+  for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
+    initRoot(root);
+  }
+  // Item blocks are stowable even on pages that render no inventory panel.
+  mountItems();
+}
 
-    const setOpen = (open: boolean) => {
-      if (panel) panel.toggleAttribute("hidden", !open);
-      root
-        .querySelector<HTMLElement>("[data-inventory-toggle]")
-        ?.setAttribute("aria-expanded", String(open));
-      write(openKey, open ? "1" : "0");
+/**
+ * Quartz swaps page content without a reload, so freshly inserted item blocks
+ * would never get their buttons. Re-run (idempotently) after every navigation.
+ */
+function watchNavigation() {
+  let queued = false;
+  const rerun = () => {
+    if (queued) return;
+    queued = true;
+    const run = () => {
+      queued = false;
+      init();
     };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  };
 
-    root
-      .querySelector<HTMLElement>("[data-inventory-toggle]")
-      ?.addEventListener("click", () => {
-        setOpen(panel ? panel.hasAttribute("hidden") : true);
-      });
+  for (const type of ["popstate", "hashchange", "nav"] as const) {
+    window.addEventListener(type, rerun);
+  }
+  document.addEventListener("nav:end", rerun as EventListener);
 
-    root
-      .querySelector<HTMLElement>("[data-inventory-clear]")
-      ?.addEventListener("click", () => {
-        const next: InventoryEntry[] = [];
-        write(storageKey, serializeInventory(next));
-        render(root, next);
-        refreshItemButtons(next);
-      });
-
-    root.addEventListener("click", (event) => {
-      const slug = (event.target as HTMLElement | null)?.getAttribute?.("data-inventory-remove");
-      if (!slug) return;
-      event.preventDefault();
-      const next = removeEntry(parseInventory(read(storageKey)), slug);
-      write(storageKey, serializeInventory(next));
-      render(root, next);
-      refreshItemButtons(next);
-    });
-
-    if (read(openKey) === "1") setOpen(true);
-
-    const entries = parseInventory(read(storageKey));
-    render(root, entries);
-
-    for (const item of discoverItems()) {
-      mountItemButton(root, item, storageKey);
-    }
+  for (const method of ["pushState", "replaceState"] as const) {
+    const original = history[method];
+    if (typeof original !== "function") continue;
+    history[method] = function patched(this: History, ...args: Parameters<History["pushState"]>) {
+      const result = original.apply(this, args);
+      rerun();
+      return result;
+    };
   }
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init, { once: true });
+  document.addEventListener("DOMContentLoaded", () => {
+    init();
+    watchNavigation();
+  }, { once: true });
 } else {
   init();
+  watchNavigation();
 }
