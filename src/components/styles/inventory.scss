@@ -180,7 +180,9 @@ html.inventory-modal-open body {
 .inventory-modal {
   position: fixed;
   inset: 0;
-  z-index: 999;
+  // Well above Quartz's sidebars (`.left-sidebar` stacks around 400) and its
+  // explorer, so the dialog is never overlapped.
+  z-index: 99999;
 
   &[hidden] {
     display: none;

@@ -34,7 +34,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/storage.test.mjs && node test/inline-runtime.test.mjs",
+    "test": "npm run build && node test/inventory.test.mjs",
     "check": "npm run typecheck && npm run test",
     "prepublishOnly": "npm run build"
   },

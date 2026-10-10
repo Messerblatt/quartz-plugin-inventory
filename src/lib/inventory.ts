@@ -6,11 +6,8 @@
  */
 
 export interface InventoryEntry {
-  /** Unique id: `page#anchor` of the block the item was first stashed from. */
+  /** Unique id: `page#anchor` of the block the item was stashed from. */
   slug: string;
-  /** Identity used for de-duplication: `category:slugified name`. Items with
-   *  the same merge key are a single row whose quantity grows. */
-  mergeKey: string;
   /** Name of the item, as written inside the fence (never truncated). */
   name: string;
   /** Fence language the item came from: "item", "event", "secret", … */
@@ -21,8 +18,6 @@ export interface InventoryEntry {
   location: string;
   /** ISO timestamp of when the item was first stashed. */
   timestamp: string;
-  /** Every `page#anchor` this item was stashed from, newest last. */
-  origins: string[];
   /** Note slug the item was first stashed from, kept for provenance. */
   page: string;
   /** Anchor id of the item block on that page. */
@@ -78,12 +73,24 @@ export function normalizeQuantity(value: unknown): number {
 }
 
 /**
- * Identity used to merge identical items: same category + same slugified name.
- * Stashing "health" twice therefore grows one row's quantity instead of adding
- * a second row.
+ * Are these two item names the same item?
+ *
+ * The inventory compares names by equivalence (case, punctuation and spacing
+ * ignored), so `Health`, `health` and `HEALTH!` are one item: stashing another
+ * one adds to its quantity instead of creating a duplicate row.
  */
-export function mergeKeyFor(name: string, category: ItemCategory): string {
-  return `${category}:${slugify(name) || "item"}`;
+export function sameItemName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const left = slugify(a ?? "");
+  const right = slugify(b ?? "");
+  return left.length > 0 && left === right;
+}
+
+/** The entry in `entries` that is the same item as `entry`, if any. */
+export function findSameItem(
+  entries: InventoryEntry[],
+  name: string,
+): InventoryEntry | undefined {
+  return entries.find((e) => sameItemName(e.name, name));
 }
 
 /** Fill in defaults for anything a stored record (or legacy payload) lacks. */
@@ -102,75 +109,52 @@ export function normalizeEntry(value: unknown): InventoryEntry | null {
 
   if (!name || !slug || !timestamp) return null;
 
-  const category = isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY;
-
   return {
     slug,
-    mergeKey: mergeKeyFor(name, category),
     name,
-    category,
+    category: isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY,
     quantity: normalizeQuantity(entry.quantity),
     location: typeof entry.location === "string" ? entry.location : "",
     timestamp,
-    origins: Array.isArray(entry.origins) && entry.origins.length > 0
-      ? entry.origins.filter((origin): origin is string => typeof origin === "string")
-      : [slug],
     page: typeof entry.page === "string" ? entry.page : "",
     anchor: typeof entry.anchor === "string" ? entry.anchor : "",
   };
 }
 
 /**
- * Add a freshly stashed block to the inventory.
- *
- * Identical items (same `mergeKey`) collapse into a single row: the quantity
- * grows, the new origin is remembered, and the original timestamp is kept.
+ * Add a freshly stashed item. If the same item is already carried, its quantity
+ * grows instead of a second row appearing.
  */
 export function addStashedItem(
   entry: InventoryEntry,
   current: InventoryEntry[],
 ): InventoryEntry[] {
-  const existing = current.find((e) => e.mergeKey === entry.mergeKey);
-
+  const existing = findSameItem(current, entry.name);
   if (!existing) return [entry, ...current];
-
-  const origins = existing.origins.includes(entry.slug)
-    ? existing.origins
-    : [...existing.origins, entry.slug];
 
   const merged: InventoryEntry = {
     ...existing,
     quantity: normalizeQuantity(existing.quantity + entry.quantity),
-    origins,
   };
 
-  return [merged, ...current.filter((e) => e.mergeKey !== entry.mergeKey)];
+  return [merged, ...current.filter((e) => e !== existing)];
 }
 
 /**
- * Take a block back out of the inventory. Merged rows only lose the quantity
- * contributed by that origin; the row disappears once nothing is left of it.
+ * Take an item back out: subtract the quantity that was carried in, dropping the
+ * row entirely once nothing is left of it.
  */
 export function removeStashedItem(
-  entry: Pick<InventoryEntry, "slug" | "mergeKey" | "quantity">,
+  item: Pick<InventoryEntry, "name" | "quantity">,
   current: InventoryEntry[],
 ): InventoryEntry[] {
-  const existing = current.find((e) => e.mergeKey === entry.mergeKey);
+  const existing = findSameItem(current, item.name);
   if (!existing) return current;
 
-  if (!existing.origins.includes(entry.slug)) return current;
+  const quantity = existing.quantity - item.quantity;
+  if (quantity < 1) return current.filter((e) => e !== existing);
 
-  const origins = existing.origins.filter((origin) => origin !== entry.slug);
-  const quantity = existing.quantity - entry.quantity;
-
-  if (origins.length === 0 || quantity < 1) {
-    return current.filter((e) => e.mergeKey !== entry.mergeKey);
-  }
-
-  return [
-    { ...existing, origins, quantity },
-    ...current.filter((e) => e.mergeKey !== entry.mergeKey),
-  ];
+  return [{ ...existing, quantity }, ...current.filter((e) => e !== existing)];
 }
 
 /**

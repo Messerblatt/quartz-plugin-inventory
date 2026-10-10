@@ -23,9 +23,9 @@ items into a persistent, IndexedDB-backed backpack.
   ```
   ````
 
-- Identical items merge: stashing a second `health` raises the quantity of the
-  existing `health` row instead of adding a duplicate. Stashing the same item
-  again from another page adds its fenced quantity to the same row.
+- Identical items merge: item names are compared by equivalence (case,
+  punctuation and spacing ignored), so stashing a second `health` raises the
+  quantity of the carried `health` instead of adding a duplicate row.
 - Storage is **IndexedDB via [Dexie](https://dexie.org)**, not localStorage, so
   the inventory is not capped at a few megabytes and can grow.
 - The plugin asks the browser for **persistent storage**
@@ -81,13 +81,11 @@ IndexedDB database `"<storageKey>:db"` (default `quartz:inventory:db`), table
 ```json
 {
   "slug": "notes/gear/#diesel",
-  "mergeKey": "item:diesel",
   "name": "Diesel",
   "category": "item",
   "quantity": 3,
   "location": "Cellar, shelf 2",
   "timestamp": "2026-10-09T19:10:20.029Z",
-  "origins": ["notes/gear/#diesel", "shop/gear/#diesel"],
   "page": "notes/gear/",
   "anchor": "diesel"
 }
@@ -95,15 +93,14 @@ IndexedDB database `"<storageKey>:db"` (default `quartz:inventory:db`), table
 
 `page` is the page path as the browser sees it (no leading slash).
 `category` is the fence language (`item`, `event`, `secret`).
-`mergeKey` (`category:slugified name`) is what de-duplicates items; `origins`
-lists every block that contributed to the row, so unstashing a block only takes
-back what that block added.
+
+There is no merge key to maintain: when an item is stashed, its name is compared
+against the carried items (`sameItemName`) and an equivalent name grows that
+row's quantity instead of inserting a new one.
 
 A pre-IndexedDB inventory in `localStorage["quartz:inventory"]` is migrated
 once, on first open, and the old key is removed afterwards. Records without a
-category/quantity/location are upgraded with `item` / `1` / `""`, and records
-without a `mergeKey` get one on read (leftover duplicates then collapse into a
-single row with a summed quantity).
+category/quantity/location are upgraded with `item` / `1` / `""`.
 
 The panel's open/closed flag stays in `localStorage` (`quartz:inventory:open`),
 since it must be readable synchronously while the page renders.
@@ -119,13 +116,14 @@ Pure helpers for this format live in `src/lib/inventory.ts` (model) and
 ```ts
 import {
   addStashedItem,
+  findSameItem,
   itemDetailsFromBlock,
-  mergeKeyFor,
   normalizeQuantity,
   openInventoryStore,
   parseInventory,
   removeStashedItem,
   requestPersistentStorage,
+  sameItemName,
   sortInventory,
   truncateTitle,
 } from "@quartz-community/plugin-inventory";
@@ -133,10 +131,10 @@ import {
 
 ```ts
 const store = await openInventoryStore("quartz:inventory");
-const items = await store.all();          // newest first, duplicates merged
-await store.put({ slug: "gear#diesel", mergeKey: mergeKeyFor("Diesel", "item"),
+const items = await store.all();          // newest first
+await store.put({ slug: "gear#diesel",
                   name: "Diesel", category: "item", quantity: 3, location: "Cellar",
-                  timestamp: new Date().toISOString(), origins: ["gear#diesel"],
+                  timestamp: new Date().toISOString(),
                   page: "gear", anchor: "diesel" });
 ```
 

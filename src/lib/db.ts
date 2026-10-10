@@ -12,8 +12,8 @@
 import Dexie, { type Table } from "dexie";
 import {
   DEFAULT_STORAGE_KEY,
+  findSameItem,
   normalizeEntry,
-  normalizeQuantity,
   parseInventory,
   type InventoryEntry,
 } from "./inventory.ts";
@@ -35,26 +35,32 @@ export class InventoryDb extends Dexie {
 
   constructor(storageKey: string = DEFAULT_STORAGE_KEY) {
     super(databaseName(storageKey));
-    // slug is the primary key; mergeKey resolves identical items to a single
-    // row, timestamp/category are indexed for sorting and the category filters
-    // planned for ```event / ```secret.
+    // slug is the primary key; timestamp/category are indexed for sorting and
+    // the category filters planned for ```event / ```secret. Identical items
+    // are recognised by name, so there is no key to manage for that.
     this.version(1).stores({
       items: "slug, timestamp, category",
       meta: "key",
     });
+    // v2 added (and v3 drops) a merge-key index; nothing to migrate, the extra
+    // index was only ever written by the unreleased merge implementation.
     this.version(2).stores({
-      items: "slug, timestamp, category, mergeKey",
+      items: "slug, timestamp, category",
+      meta: "key",
+    });
+    this.version(3).stores({
+      items: "slug, timestamp, category",
       meta: "key",
     });
   }
 }
 
 export interface InventoryStore {
-  /** All entries, newest first, duplicates already merged. */
+  /** All entries, newest first. */
   all(): Promise<InventoryEntry[]>;
   get(slug: string): Promise<InventoryEntry | undefined>;
-  /** The row a given item identity maps to, if the item is in the inventory. */
-  getByMergeKey(mergeKey: string): Promise<InventoryEntry | undefined>;
+  /** The carried item with the same name, if any. */
+  getByName(name: string): Promise<InventoryEntry | undefined>;
   /** Insert or update a single entry. */
   put(entry: InventoryEntry): Promise<void>;
   remove(slug: string): Promise<void>;
@@ -73,29 +79,10 @@ export class DexieInventoryStore implements InventoryStore {
 
   async all(): Promise<InventoryEntry[]> {
     const rows = await this.db.items.toArray();
-    // Records written before merging existed get their identity filled in, and
-    // any leftover duplicates (same mergeKey) collapse into the newest row.
     const entries = rows
       .map(normalizeEntry)
       .filter((entry): entry is InventoryEntry => entry !== null);
-
-    const byMergeKey = new Map<string, InventoryEntry>();
-    for (const entry of entries) {
-      const seen = byMergeKey.get(entry.mergeKey);
-      if (!seen) {
-        byMergeKey.set(entry.mergeKey, entry);
-        continue;
-      }
-      const [newer, older] =
-        entry.timestamp.localeCompare(seen.timestamp) >= 0 ? [entry, seen] : [seen, entry];
-      byMergeKey.set(entry.mergeKey, {
-        ...newer,
-        quantity: normalizeQuantity(newer.quantity + older.quantity),
-        origins: [...new Set([...newer.origins, ...older.origins])],
-      });
-    }
-
-    return [...byMergeKey.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
   async get(slug: string): Promise<InventoryEntry | undefined> {
@@ -103,9 +90,10 @@ export class DexieInventoryStore implements InventoryStore {
     return row ? (normalizeEntry(row) ?? undefined) : undefined;
   }
 
-  async getByMergeKey(mergeKey: string): Promise<InventoryEntry | undefined> {
-    const row = await this.db.items.where("mergeKey").equals(mergeKey).first();
-    return row ? (normalizeEntry(row) ?? undefined) : undefined;
+  /** Name equivalence, checked against the carried items. */
+  async getByName(name: string): Promise<InventoryEntry | undefined> {
+    const entries = await this.all();
+    return findSameItem(entries, name);
   }
 
   async put(entry: InventoryEntry): Promise<void> {

@@ -23,12 +23,11 @@ import {
   DEFAULT_CATEGORY,
   DEFAULT_STORAGE_KEY,
   ITEM_SELECTOR,
+  addStashedItem,
+  findSameItem,
   isItemCategory,
   itemDetailsFromBlock,
   itemNameFromBlock,
-  addStashedItem,
-  mergeKeyFor,
-  removeStashedItem,
   slugify,
   sortInventory,
   truncateTitle,
@@ -128,7 +127,6 @@ interface DiscoveredItem {
   name: string;
   slug: string;
   anchor: string;
-  mergeKey: string;
   category: ItemCategory;
   quantity: number;
   location: string;
@@ -209,18 +207,7 @@ function discoverItems(): DiscoveredItem[] {
     el.classList.add("inventory-item-block");
     el.classList.add(`inventory-item-block--${category}`);
 
-    items.push({
-      el,
-      name,
-      slug,
-      anchor,
-      // Identical names are one inventory row: stashing a second "health"
-      // raises the quantity of the first instead of adding a duplicate.
-      mergeKey: mergeKeyFor(name, category),
-      category,
-      quantity,
-      location,
-    });
+    items.push({ el, name, slug, anchor, category, quantity, location });
   }
 
   return items;
@@ -231,13 +218,11 @@ function discoverItems(): DiscoveredItem[] {
 function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEntry {
   return {
     slug: item.slug,
-    mergeKey: item.mergeKey,
     name: item.name,
     category: item.category,
     quantity: item.quantity,
     location: item.location,
     timestamp: existing?.timestamp ?? new Date().toISOString(),
-    origins: existing?.origins ?? [item.slug],
     page: currentPage(),
     anchor: item.anchor,
   };
@@ -246,35 +231,30 @@ function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEnt
 // --- Rendering -------------------------------------------------------------
 
 /**
- * Keep every item button (and its block) on the page in sync with stored state.
- *
- * State is tracked per block (`origins`), not per row: two blocks named
- * "health" merge into a single inventory row, but each keeps its own button and
- * only hides its own text once it has been stashed itself.
+ * Keep every item button (and its block) on the page in sync with the carried
+ * items. State is decided by name: every block showing the same item is
+ * "stashed" once that item is in the inventory.
  */
 function refreshItemButtons(entries: InventoryEntry[]) {
-  const isStashed = (slug: string | null) =>
-    slug != null && entries.some((e) => e.origins.includes(slug));
-
   for (const button of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
   )) {
-    const stashed = isStashed(button.getAttribute("data-inventory-item-toggle"));
+    const stashed = isCarried(entries, button.getAttribute(ITEM_NAME_ATTR));
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
   }
 
-  const page = currentPage();
   for (const el of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
   )) {
-    const anchor = el.getAttribute("data-inventory-item");
-    el.classList.toggle(
-      "is-stashed-item",
-      anchor != null && entries.some((e) => e.origins.includes(`${page}#${anchor}`)),
-    );
+    el.classList.toggle("is-stashed-item", isCarried(entries, el.getAttribute(ITEM_NAME_ATTR)));
   }
+}
+
+/** Is this item (by name) currently in the inventory? */
+function isCarried(entries: InventoryEntry[], name: string | null): boolean {
+  return name != null && findSameItem(entries, name) !== undefined;
 }
 
 function setBadge(root: HTMLElement, count: number) {
@@ -384,7 +364,6 @@ function syncAll(entries: InventoryEntry[]) {
 function mountItemButton(
   item: DiscoveredItem,
   storageKey: string,
-  isStashed: (slug: string) => boolean,
   onToggle: (item: DiscoveredItem) => void,
 ) {
   const figure = item.el.closest("figure") ?? item.el;
@@ -400,17 +379,10 @@ function mountItemButton(
   button.type = "button";
   button.className = "inventory-item-toggle";
   button.setAttribute("data-inventory-item-toggle", item.slug);
-  button.setAttribute("data-inventory-merge-key", item.mergeKey);
+  // Carry the item name on the button so state can be refreshed from the store
+  // without keeping a reference to the discovered item.
+  button.setAttribute(ITEM_NAME_ATTR, item.name);
   button.setAttribute("aria-label", `Stash ${item.name} in your inventory`);
-
-  const sync = () => {
-    const stashed = isStashed(item.slug);
-    button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
-    button.setAttribute("aria-pressed", String(stashed));
-    button.classList.toggle("is-stashed", stashed);
-  };
-
-  sync();
 
   button.addEventListener("click", () => onToggle(item));
 
@@ -421,52 +393,35 @@ function mountItemButton(
 async function mountItems() {
   const storageKey = storageKeyFor();
   const store = await storeFor(storageKey);
-  const entries = await store.all();
 
   for (const item of discoverItems()) {
-    mountItemButton(
-      item,
-      storageKey,
-      (slug) => entries.some((e) => e.origins.includes(slug)),
-      (target) => void toggleItem(store, target),
-    );
+    mountItemButton(item, storageKey, (target) => void toggleItem(store, target));
   }
 
-  refreshItemButtons(entries);
+  refreshItemButtons(await store.all());
 }
 
 /**
  * Stash / unstash a block, then repaint everything from the store.
  *
- * Identical items (same `mergeKey`) collapse into one row: stashing a second
- * "health" raises the quantity of the existing row and records the new origin
- * instead of adding a duplicate. Unstashing a block takes back exactly the
- * quantity that block contributed.
+ * Items are matched by name: stashing another "health" while one is carried
+ * raises its quantity instead of adding a second row, and unstashing takes
+ * that quantity back out again.
  */
 async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
-  const existing = await store.getByMergeKey(item.mergeKey);
+  const current = await store.all();
+  const existing = findSameItem(current, item.name);
 
   if (!existing) {
     await store.put(entryFor(item));
-    syncAll(await store.all());
-    return;
+  } else if (existing.slug === item.slug) {
+    // This very block is in the bag: drop it entirely.
+    await store.remove(existing.slug);
+  } else {
+    const [merged] = addStashedItem(entryFor(item, existing), [existing]);
+    if (merged) await store.put(merged);
   }
 
-  // This very block is already stashed -> take it back out.
-  if (existing.origins.includes(item.slug)) {
-    const [kept] = removeStashedItem(
-      { slug: item.slug, mergeKey: item.mergeKey, quantity: item.quantity },
-      [existing],
-    );
-    if (!kept) await store.remove(existing.slug);
-    else await store.put(kept);
-    syncAll(await store.all());
-    return;
-  }
-
-  // Another block of the same item: merge into the existing row.
-  const [merged] = addStashedItem(entryFor(item, existing), [existing]);
-  if (merged) await store.put(merged);
   syncAll(await store.all());
 }
 
