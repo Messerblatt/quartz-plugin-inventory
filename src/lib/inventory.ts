@@ -1,16 +1,27 @@
+/**
+ * Pure, dependency-free inventory model.
+ *
+ * Persistence lives in `./db.ts` (Dexie / IndexedDB); everything here is plain
+ * data plus small helpers, so it stays testable and importable on its own.
+ */
+
 export interface InventoryEntry {
-  /** Slugified item name, unique id. */
+  /** Unique id: `page#anchor` of the block the item was stashed from. */
   slug: string;
-  /** Item name as written inside the ```item fence (never truncated). */
-  title: string;
-  /** Note slug the item was stashed from, used to build the link back. */
+  /** Name of the item, as written inside the fence (never truncated). */
+  name: string;
+  /** Fence language the item came from: "item", "event", "secret", … */
+  category: ItemCategory;
+  /** How many of this item are carried. Always >= 1. */
+  quantity: number;
+  /** Where the item was found, e.g. "Cellar, shelf 2". May be empty. */
+  location: string;
+  /** ISO timestamp of when the item was stashed. */
+  timestamp: string;
+  /** Note slug the item was stashed from, kept for provenance. */
   page: string;
   /** Anchor id of the item block on that page. */
   anchor: string;
-  /** ISO timestamp of when the item was stashed. */
-  addedAt: string;
-  /** Fence language the item came from: "item", "event", "secret", … */
-  category: ItemCategory;
 }
 
 export const DEFAULT_STORAGE_KEY = "quartz:inventory";
@@ -47,26 +58,60 @@ export function isInventoryEntry(value: unknown): value is InventoryEntry {
   return (
     typeof entry.slug === "string" &&
     entry.slug.length > 0 &&
-    typeof entry.title === "string" &&
-    typeof entry.addedAt === "string" &&
+    typeof entry.name === "string" &&
+    typeof entry.timestamp === "string" &&
     typeof entry.page === "string" &&
     typeof entry.anchor === "string"
   );
 }
 
-/** Parse a stored payload, dropping malformed entries. Entries written before
- *  categories existed (or with an unknown one) fall back to the default. */
+/** Clamp to a whole number of items, at least one. */
+export function normalizeQuantity(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(999, Math.round(parsed)));
+}
+
+/** Fill in defaults for anything a stored record (or legacy payload) lacks. */
+export function normalizeEntry(value: unknown): InventoryEntry | null {
+  if (typeof value !== "object" || value === null) return null;
+  const entry = value as Partial<InventoryEntry> & { title?: string; addedAt?: string };
+
+  const name = typeof entry.name === "string" ? entry.name : entry.title;
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  const timestamp =
+    typeof entry.timestamp === "string"
+      ? entry.timestamp
+      : typeof entry.addedAt === "string"
+        ? entry.addedAt
+        : "";
+
+  if (!name || !slug || !timestamp) return null;
+
+  return {
+    slug,
+    name,
+    category: isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY,
+    quantity: normalizeQuantity(entry.quantity),
+    location: typeof entry.location === "string" ? entry.location : "",
+    timestamp,
+    page: typeof entry.page === "string" ? entry.page : "",
+    anchor: typeof entry.anchor === "string" ? entry.anchor : "",
+  };
+}
+
+/**
+ * Parse a legacy `localStorage` payload, dropping malformed records. Pre-1.0
+ * inventories only had `title`/`addedAt` and no category, quantity or location.
+ */
 export function parseInventory(raw: string | null): InventoryEntry[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .filter(isInventoryEntry)
-      .map((entry) => ({
-        ...entry,
-        category: isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY,
-      }));
+      .map(normalizeEntry)
+      .filter((entry): entry is InventoryEntry => entry !== null);
   } catch {
     return [];
   }
@@ -78,7 +123,7 @@ export function serializeInventory(entries: InventoryEntry[]): string {
 
 /** Newest entries first. */
 export function sortInventory(entries: InventoryEntry[]): InventoryEntry[] {
-  return [...entries].sort((a, b) => b.addedAt.localeCompare(a.addedAt));
+  return [...entries].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 export function removeEntry(entries: InventoryEntry[], slug: string): InventoryEntry[] {
@@ -103,7 +148,7 @@ export function toggleEntry(
 
 /**
  * GitHub-style slug, matching what Quartz uses for heading anchors.
- * Kept dependency-free so the inline bundle stays self-contained.
+ * Kept dependency-free so it can be reused outside the browser bundle.
  */
 export function slugify(text: string): string {
   return text
@@ -130,13 +175,58 @@ export function itemNameFromBlock(text: string | null | undefined): string {
   return "";
 }
 
+export interface ItemDetails {
+  quantity: number;
+  location: string;
+}
+
+/**
+ * Read quantity/location hints from the remaining lines of a fence, so authors
+ * can write:
+ *
+ *   ```item
+ *   Diesel
+ *   x3
+ *   Location: Cellar, shelf 2
+ *   ```
+ *
+ * Recognised forms: `x3` / `3x` / a bare number for quantity, and
+ * `location: …` (also `found in …`, `where: …`). Anything else is ignored and
+ * falls back to the defaults.
+ */
+export function itemDetailsFromBlock(text: string | null | undefined): ItemDetails {
+  const details: ItemDetails = { quantity: 1, location: "" };
+  if (!text) return details;
+
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    // Drop the name line (the first non-empty one).
+    .filter((line) => line.length > 0)
+    .slice(1);
+
+  for (const line of lines) {
+    const labeled = /^(?:location|found\s+in|where)\s*[:=]\s*(.+)$/i.exec(line);
+    if (labeled) {
+      details.location = labeled[1]?.trim() ?? "";
+      continue;
+    }
+    const quantity = /^x\s*(\d+)$|^(\d+)\s*x$|^(\d+)$/i.exec(line);
+    if (quantity) {
+      details.quantity = normalizeQuantity(quantity[1] ?? quantity[2] ?? quantity[3]);
+    }
+  }
+
+  return details;
+}
+
 /** Longest item name shown in full before it is elided. */
 export const MAX_DISPLAY_TITLE = 20;
 
 /**
  * Shorten an item name for display, e.g.
  *   "Lorem Ipsum ladada blablaba" -> "Lorem Ipsum ladada..."
- * Display only - the stored title is never truncated.
+ * Display only - the stored name is never truncated.
  */
 export function truncateTitle(
   title: string | null | undefined,

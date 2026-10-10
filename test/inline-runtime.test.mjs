@@ -2,27 +2,30 @@
  * Smoke test for the browser runtime, using the real rehype-pretty-code markup
  * (```item fence -> figure > pre[data-language=item] > code[data-language=item]).
  *
- * Runs the built inline bundle inside jsdom against a localStorage shim.
+ * Runs the built inline bundle inside jsdom, against fake-indexeddb (the runtime
+ * persists with Dexie) and jsdom's localStorage shim.
  */
-import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { JSDOM } from "jsdom";
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 // Import the built plugin and take the exact strings the component registers
 // as `css` / `afterDOMLoaded` - i.e. what Quartz itself would inject.
 const { Inventory } = await import("../dist/components/index.js");
 const Component = Inventory({});
 const code = Component.afterDOMLoaded;
 
-const itemFigure = (name) => `
+const itemFigure = (name, lang = "item") => `
   <figure data-rehype-pretty-code-figure="">
-    <pre tabindex="0" data-language="item" data-theme="github-light github-dark">
+    <pre tabindex="0" data-language="${lang}" data-theme="github-light github-dark">
       <button class="clipboard-button" type="button" aria-label="Copy source">x</button>
-      <code data-language="item" data-theme="github-light github-dark" style="display:grid;">
+      <code data-language="${lang}" data-theme="github-light github-dark" style="display:grid;">
         <span data-line=""> </span>
-        <span data-line=""><span>${name}</span></span>
+        ${name
+          .split("\n")
+          .map((line) => `<span data-line=""><span>${line}</span></span>`)
+          .join("\n        ")}
         <span data-line=""> </span>
       </code>
     </pre>
@@ -39,12 +42,7 @@ const itemFigureOneLiner = (name) => `
     </pre>
   </figure>`;
 
-const page = `<!doctype html><html><body>
-  <div class="page-content">
-    ${itemFigure("Brille")}
-    ${itemFigure("Taschenlampe")}
-  </div>
-  <aside class="inventory" data-inventory data-inventory-key="quartz:inventory">
+const panel = `<aside class="inventory" data-inventory data-inventory-key="quartz:inventory">
     <button type="button" data-inventory-toggle><span data-inventory-count>0</span></button>
     <div data-inventory-panel hidden>
       <p data-inventory-empty>empty</p>
@@ -59,189 +57,335 @@ const page = `<!doctype html><html><body>
         <button type="button" data-inventory-clear hidden>Clear</button>
       </div>
     </div>
-  </aside>
+  </aside>`;
+
+const pageFor = (figures) =>
+  `<!doctype html><html><body>
+  <div class="page-content">
+    ${figures}
+  </div>
+  ${panel}
 </body></html>`;
 
-const dom = new JSDOM(page, { url: "https://example.com/gear", runScripts: "outside-only" });
+const page = pageFor(`${itemFigure("Brille")}\n${itemFigure("Taschenlampe")}`);
+
+/** Boot a fresh page: own jsdom window, own IndexedDB, own localStorage. */
+function boot(html = page, url = "https://example.com/gear", seed) {
+  const dom = new JSDOM(html, { url, runScripts: "outside-only" });
+  const { window } = dom;
+  window.indexedDB = new IDBFactory();
+  window.IDBKeyRange = IDBKeyRange;
+  seed?.(window);
+  window.eval(code);
+  return dom;
+}
+
+// The runtime is async (Dexie) and boots on DOMContentLoaded, which jsdom
+// fires asynchronously - give it a few turns to settle.
+const settle = async (ms = 60) => {
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, ms / 5));
+};
+
+const dom = boot();
 const { window } = dom;
-const store = window.localStorage;
-
-window.eval(code);
-// jsdom keeps readyState "loading" while the script runs; let it fire
-// DOMContentLoaded so the runtime's bootstrap runs.
-await new Promise((r) => setTimeout(r, 0));
-
+await settle();
 const doc = window.document;
+
 const results = [];
 const check = (name, cond, extra = "") =>
   results.push(`${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : "  " + extra}`);
 
-// Nested <code> must not be double-counted: 2 figures -> 2 toggles.
+const click = (el, type = "click") => el.dispatchEvent(new window.MouseEvent(type, { bubbles: true }));
+const nameOf = (scope, i = 0) => scope.querySelectorAll(".inventory-name")[i]?.textContent;
+
+// --- Discovery -------------------------------------------------------------
+
 const toggles = doc.querySelectorAll("[data-inventory-item-toggle]");
 check("one toggle per item block (no double-count from nested code)", toggles.length === 2, `got ${toggles.length}`);
-check("toggle labels carry the item name", [...toggles].every((b) => /\+ Stash/.test(b.textContent)), [...toggles].map((b) => b.textContent).join(","));
+check("toggle labels carry the item name", [...toggles].every((b) => /\+ Stash/.test(b.textContent)));
 check("button injected into the figure", [...toggles].every((b) => b.closest("figure") !== null));
-check("item block tagged with anchor", [...doc.querySelectorAll('[data-inventory-item]')].map((e) => e.getAttribute("data-inventory-item")).join(",") === "brille,taschenlampe", [...doc.querySelectorAll('[data-inventory-item]')].map((e) => e.getAttribute("data-inventory-item")).join(","));
+check(
+  "item block tagged with anchor",
+  [...doc.querySelectorAll("[data-inventory-item]")].map((e) => e.getAttribute("data-inventory-item")).join(",") === "brille,taschenlampe",
+);
+check("block tagged with its category", doc.querySelector('[data-inventory-item="brille"]').getAttribute("data-inventory-category") === "item");
 
-// Stash the first item.
-toggles[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-const stored = JSON.parse(store.getItem("quartz:inventory") ?? "[]");
-check("stashed one entry", stored.length === 1, JSON.stringify(stored));
-check("entry slug is page#anchor", stored[0]?.slug === "gear#brille", stored[0]?.slug);
-check("entry title parsed from fence text", stored[0]?.title === "Brille", stored[0]?.title);
-check("entry page recorded", stored[0]?.page === "gear", stored[0]?.page);
-check("count badge updated", doc.querySelector("[data-inventory-count]").textContent === "1", doc.querySelector("[data-inventory-count]").textContent);
-check("toggle flips to stashed", /\u2713 Stashed/.test(doc.querySelectorAll("[data-inventory-item-toggle]")[0].textContent));
-check("entry rendered in panel", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1, `${doc.querySelectorAll("[data-inventory-items] .inventory-entry").length}`);
-check("entry text is the item name", doc.querySelector("[data-inventory-items] .inventory-name").textContent === "Brille", doc.querySelector("[data-inventory-items] .inventory-name").textContent);
+// --- Stashing --------------------------------------------------------------
+
+click(toggles[0]);
+await settle();
+check("count badge updated", doc.querySelector("[data-inventory-count]").textContent === "1");
+check("toggle flips to stashed", /\u2713 Stashed/.test(toggles[0].textContent));
+check("entry rendered in panel", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
+check("entry text is the item name", nameOf(doc.querySelector("[data-inventory-items]")) === "Brille");
+check("entries are plain text, not links", doc.querySelectorAll("[data-inventory-items] a").length === 0);
 check("empty hint hidden", doc.querySelector("[data-inventory-empty]").hasAttribute("hidden") === true);
+check("default quantity shown", doc.querySelector("[data-inventory-items] .inventory-quantity").textContent === "\u00d71");
+check("stashed block hidden", doc.querySelector('[data-inventory-item="brille"]').classList.contains("is-stashed-item"));
 
-// Toggle the same item again -> unstash.
-doc.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("unstash removes entry", JSON.parse(store.getItem("quartz:inventory")).length === 0);
+// The data must be in IndexedDB now, not localStorage.
+const stored = await new Promise((resolve, reject) => {
+  const req = window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const getAll = req.result.transaction("items").objectStore("items").getAll();
+    getAll.onsuccess = () => resolve(getAll.result);
+    getAll.onerror = () => reject(getAll.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("entry stored in IndexedDB", stored.length === 1, JSON.stringify(stored));
+check("stored record has name/quantity/location/timestamp",
+  stored[0]?.name === "Brille" && stored[0]?.quantity === 1 && stored[0]?.location === "" && typeof stored[0]?.timestamp === "string",
+  JSON.stringify(stored[0]));
+check("nothing left in localStorage", window.localStorage.getItem("quartz:inventory") === null);
+
+click(toggles[0]);
+await settle();
+check("unstash removes entry", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 0);
 check("badge back to 0", doc.querySelector("[data-inventory-count]").textContent === "0");
 
-// Panel toggle persists open state.
-doc.querySelector("[data-inventory-toggle]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("panel opens", doc.querySelector("[data-inventory-panel]").hasAttribute("hidden") === false);
-check("open state persisted", store.getItem("quartz:inventory:open") === "1");
+// --- Panel open state ------------------------------------------------------
 
-// Stashing hides the item text but keeps the block (and its anchor).
-doc.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+click(doc.querySelector("[data-inventory-toggle]"));
+await settle();
+check("panel opens", doc.querySelector("[data-inventory-panel]").hasAttribute("hidden") === false);
+check("open state persisted", window.localStorage.getItem("quartz:inventory:open") === "1");
+
+// --- Stashed text and CSS --------------------------------------------------
+
+click(doc.querySelectorAll("[data-inventory-item-toggle]")[0]);
+await settle();
 const stashedBlock = doc.querySelector('[data-inventory-item="brille"]');
 check("stashed block marked", stashedBlock.classList.contains("is-stashed-item") === true);
-check(
-  "css hides the text of a stashed block",
-  /\.is-stashed-item[^{]*span\[data-line\][^{]*\{[^}]*display:\s*none/.test(Component.css),
-);
-check(
-  "css drops only blank lines (keeps a one-liner name)",
-  /\.is-blank-line[^{]*\{[^}]*display:\s*none/.test(Component.css) &&
-    !/span\[data-line\]:last-child[^{]*\{\s*display:\s*none/.test(Component.css),
-);
-check("stashed block keeps its title attribute for remounts", stashedBlock.getAttribute("data-inventory-item-title") === "Brille");
+check("stashed block keeps its name for remounts", stashedBlock.getAttribute("data-inventory-item-title") === "Brille");
+check("css hides the text of a stashed block", /\.is-stashed-item[^{]*span\[data-line\][^{]*\{[^}]*display:\s*none/.test(Component.css));
+check("css drops only blank lines (keeps a one-liner name)", /\.is-blank-line[^{]*\{[^}]*display:\s*none/.test(Component.css) && !/span\[data-line\]:last-child[^{]*\{\s*display:\s*none/.test(Component.css));
 
-// Client-side navigation swaps the content: buttons must come back on their own.
-const content = doc.querySelector(".page-content");
-content.innerHTML = itemFigureOneLiner("Diesel");
+// --- Client-side navigation ------------------------------------------------
+
+doc.querySelector(".page-content").innerHTML = itemFigureOneLiner("Diesel");
 window.dispatchEvent(new window.Event("popstate"));
-await new Promise((r) => setTimeout(r, 20));
+await settle();
 const remounted = doc.querySelectorAll("[data-inventory-item-toggle]");
 check("button remounted after navigation", remounted.length === 1, `got ${remounted.length}`);
-check("one-liner title parsed", remounted[0]?.getAttribute("data-inventory-item-toggle") === "gear#diesel", remounted[0]?.getAttribute("data-inventory-item-toggle"));
-const oneLiner = doc.querySelector('[data-inventory-item="diesel"]');
-check("one-liner name line is not blank", !oneLiner.querySelector("span[data-line]").classList.contains("is-blank-line"));
+check("one-liner title parsed", remounted[0]?.getAttribute("data-inventory-item-toggle") === "gear#diesel");
+check("one-liner name line is not blank", !doc.querySelector('[data-inventory-item="diesel"] span[data-line]').classList.contains("is-blank-line"));
 
-// Re-running init must not duplicate buttons or double-bind handlers.
 window.dispatchEvent(new window.Event("popstate"));
-await new Promise((r) => setTimeout(r, 20));
+await settle();
 check("no duplicate buttons after re-init", doc.querySelectorAll("[data-inventory-item-toggle]").length === 1);
-remounted[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("single toggle adds exactly one entry", JSON.parse(store.getItem("quartz:inventory")).length === 2, JSON.stringify(JSON.parse(store.getItem("quartz:inventory"))));
 
-// --- "Show all" modal -----------------------------------------------------
+// Stashed entries stay stashed across a re-render.
+check("previous stash survives re-init", doc.querySelector("[data-inventory-count]").textContent === "1", doc.querySelector("[data-inventory-count]").textContent);
+check("button for the other item is unstashed", /\+ Stash/.test(remounted[0].textContent));
+
+// --- "Show all" modal ------------------------------------------------------
+
 const modal = doc.querySelector("[data-inventory-modal]");
 const showAll = doc.querySelector("[data-inventory-show-all]");
 check("panel has no clear button", doc.querySelector("[data-inventory-panel] [data-inventory-clear]") === null);
 check("'Show all' visible with entries", showAll.hasAttribute("hidden") === false);
 check("modal starts closed", modal.hasAttribute("hidden") === true);
 
-showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+click(showAll);
+await settle();
 check("modal opens", modal.hasAttribute("hidden") === false);
 check("scroll locked", doc.documentElement.classList.contains("inventory-modal-open") === true);
-check("modal lists all entries", doc.querySelectorAll("[data-inventory-modal-items] .inventory-entry").length === 2, `${doc.querySelectorAll("[data-inventory-modal-items] .inventory-entry").length}`);
+check("modal lists all entries", doc.querySelectorAll("[data-inventory-modal-items] .inventory-entry").length === 1);
 
-doc.querySelector("[data-inventory-modal-close]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+click(doc.querySelector("[data-inventory-modal-close]"));
 check("modal closes via close button", modal.hasAttribute("hidden") === true);
 check("scroll unlocked", doc.documentElement.classList.contains("inventory-modal-open") === false);
 
-showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-doc.querySelector("[data-inventory-modal-backdrop]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+click(showAll);
+await settle();
+click(doc.querySelector("[data-inventory-modal-backdrop]"));
 check("modal closes via backdrop", modal.hasAttribute("hidden") === true);
 
-showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-doc.querySelector(".inventory-modal-content").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+click(showAll);
+await settle();
+click(doc.querySelector(".inventory-modal-content"));
 check("modal stays open on inner click", modal.hasAttribute("hidden") === false);
 doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 check("modal closes via Escape", modal.hasAttribute("hidden") === true);
 
-// Removing from the modal updates both lists.
-showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-doc.querySelector("[data-inventory-modal-items] .inventory-remove").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("remove in modal syncs panel list", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
+// --- Quantity & location editing -------------------------------------------
+
+click(remounted[0]); // stash Diesel
+await settle();
+click(showAll);
+await settle();
+const dieselRow = () =>
+  doc.querySelector('[data-inventory-modal-items] [data-inventory-slug="gear#diesel"]');
+check("modal exposes a quantity input", dieselRow().querySelector(".inventory-quantity").tagName === "INPUT");
+check("modal exposes a location input", dieselRow().querySelector(".inventory-location").tagName === "INPUT");
+
+const quantityInput = dieselRow().querySelector(".inventory-quantity");
+quantityInput.value = "5";
+quantityInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+check("panel preview follows the new quantity", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-quantity').textContent === "\u00d75", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-quantity').textContent);
+
+const locationInput = dieselRow().querySelector(".inventory-location");
+locationInput.value = "Cellar, shelf 2";
+locationInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+check("panel preview follows the new location", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-location').textContent === "Cellar, shelf 2");
+
+const readStored = () =>
+  new Promise((resolve, reject) => {
+    const req = window.indexedDB.open("quartz:inventory:db");
+    req.onsuccess = () => {
+      const get = req.result.transaction("items").objectStore("items").get("gear#diesel");
+      get.onsuccess = () => resolve(get.result);
+      get.onerror = () => reject(get.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+const diesel = await readStored();
+check("quantity persisted to IndexedDB", diesel?.quantity === 5, JSON.stringify(diesel));
+check("location persisted to IndexedDB", diesel?.location === "Cellar, shelf 2");
+
+// Unstashing drops the record; re-stashing starts from the fence hints again.
+click(doc.querySelector('[data-inventory-item-toggle="gear#diesel"]'));
+await settle();
+check("unstashed record is deleted from IndexedDB", (await readStored()) === undefined);
+click(doc.querySelector('[data-inventory-item-toggle="gear#diesel"]'));
+await settle();
+const restored = await readStored();
+check("re-stashing falls back to the fence defaults", restored?.quantity === 1 && restored?.location === "", JSON.stringify(restored));
+check("re-stashing records a fresh timestamp", typeof restored?.timestamp === "string" && restored.timestamp !== "");
+
+// Put the edited values back for the checks that follow.
+click(showAll);
+await settle();
+const dRow = doc.querySelector('[data-inventory-modal-items] [data-inventory-slug="gear#diesel"]');
+const q2 = dRow.querySelector(".inventory-quantity");
+q2.value = "5";
+q2.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+const l2 = dRow.querySelector(".inventory-location");
+l2.value = "Cellar, shelf 2";
+l2.dispatchEvent(new window.Event("change", { bubbles: true }));
+await settle();
+
+// --- Quantity/location hints in the fence ----------------------------------
+
+const hintsDom = boot(
+  pageFor(`${itemFigure("Diesel\nx3\nLocation: Cellar, shelf 2")}\n${itemFigure("Big Ben", "secret")}`),
+  "https://example.com/gear",
+);
+await settle();
+const hDoc = hintsDom.window.document;
+check("every category gets a button", hDoc.querySelectorAll("[data-inventory-item-toggle]").length === 2);
+[...hDoc.querySelectorAll("[data-inventory-item-toggle]")].forEach((b) => click(b));
+await settle();
+const rows = [...hDoc.querySelectorAll("[data-inventory-items] .inventory-entry")];
+const dieselEntry = rows.find((r) => r.getAttribute("data-inventory-slug") === "gear#diesel");
+const benRow = rows.find((r) => r.getAttribute("data-inventory-slug") === "gear#big-ben");
+check("quantity read from the fence", dieselEntry.querySelector(".inventory-quantity").textContent === "\u00d73", dieselEntry.querySelector(".inventory-quantity").textContent);
+check("location read from the fence", dieselEntry.querySelector(".inventory-location").textContent === "Cellar, shelf 2");
+check("item without hints falls back to x1", benRow.querySelector(".inventory-quantity").textContent === "\u00d71");
+check("entries show their category", rows.map((r) => r.querySelector(".inventory-tag").textContent).sort().join(",") === "item,secret");
+
+// --- Long names ------------------------------------------------------------
+
+const LONG =
+  "Lorem Ipsum ladada blablaba domi con fore concordia london big ben dollar michaelangelo";
+const longDom = boot(pageFor(itemFigure(LONG)), "https://example.com/gear");
+await settle();
+const lDoc = longDom.window.document;
+click(lDoc.querySelector("[data-inventory-item-toggle]"));
+await settle();
+const lName = lDoc.querySelector("[data-inventory-items] .inventory-name");
+check("long title is elided in the preview (20 chars + ...)", lName.textContent === "Lorem Ipsum ladada b...", lName.textContent);
+check("full title kept on hover/assistive tech", lName.getAttribute("title") === LONG);
+const longStored = await new Promise((resolve, reject) => {
+  const req = longDom.window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const get = req.result.transaction("items").objectStore("items").getAll();
+    get.onsuccess = () => resolve(get.result[0]);
+    get.onerror = () => reject(get.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("full title stored, not truncated", longStored?.name === LONG);
+
+// --- Nested / trailing-slash page paths -----------------------------------
+
+const pathDom = boot(page, "https://example.com/notes/gear/");
+await settle();
+click(pathDom.window.document.querySelector("[data-inventory-item-toggle]"));
+await settle();
+const pathEntry = await new Promise((resolve, reject) => {
+  const req = pathDom.window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const get = req.result.transaction("items").objectStore("items").getAll();
+    get.onsuccess = () => resolve(get.result[0]);
+    get.onerror = () => reject(get.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("nested/trailing-slash page recorded verbatim", pathEntry?.page === "notes/gear/", pathEntry?.page);
+check("slug includes the full page path", pathEntry?.slug === "notes/gear/#brille", pathEntry?.slug);
+
+const idxDom = boot(page, "https://example.com/");
+await settle();
+click(idxDom.window.document.querySelector("[data-inventory-item-toggle]"));
+await settle();
+const idxEntry = await new Promise((resolve, reject) => {
+  const req = idxDom.window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const get = req.result.transaction("items").objectStore("items").getAll();
+    get.onsuccess = () => resolve(get.result[0]);
+    get.onerror = () => reject(get.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("index page recorded as index", idxEntry?.page === "index", idxEntry?.page);
+
+// --- Persistence request ---------------------------------------------------
+
+check("persistent storage requested", doc.documentElement.getAttribute("data-inventory-persisted") !== null, doc.documentElement.getAttribute("data-inventory-persisted"));
+
+// --- Removing / clearing ---------------------------------------------------
+
+click(doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#brille"] .inventory-remove'));
+await settle();
+check("remove syncs panel list", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
 check("badge follows removal", doc.querySelector("[data-inventory-count]").textContent === "1");
-check("'Show all' hidden again when the last entry goes", JSON.parse(store.getItem("quartz:inventory")).length === 1);
 
-// Clearing from inside the modal empties everything and closes it.
-doc.querySelector("[data-inventory-modal] [data-inventory-clear]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
-check("clear empties the inventory", JSON.parse(store.getItem("quartz:inventory")).length === 0);
+click(doc.querySelector("[data-inventory-show-all]"));
+await settle();
+click(doc.querySelector("[data-inventory-modal] [data-inventory-clear]"));
+await settle();
+const remaining = await new Promise((resolve, reject) => {
+  const req = window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const get = req.result.transaction("items").objectStore("items").getAll();
+    get.onsuccess = () => resolve(get.result.length);
+    get.onerror = () => reject(get.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("clear empties IndexedDB", remaining === 0, `${remaining}`);
 check("clear closes the modal", modal.hasAttribute("hidden") === true);
-check("'Show all' hidden when empty", doc.querySelector("[data-inventory-show-all]").hasAttribute("hidden") === true);
+check("'Show all' hidden when empty", showAll.hasAttribute("hidden") === true);
 
-// --- Page paths -----------------------------------------------------------
-// Quartz serves both `gear` and `notes/gear/` style URLs; the page must be
-// recorded verbatim so the stored slug round-trips.
-const urlDom = new JSDOM(page, { url: "https://example.com/notes/gear/", runScripts: "outside-only" });
-urlDom.window.eval(code);
-await new Promise((r) => setTimeout(r, 0));
-const uDoc = urlDom.window.document;
-uDoc.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new urlDom.window.MouseEvent("click", { bubbles: true }));
-check(
-  "nested/trailing-slash page recorded verbatim",
-  JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page === "notes/gear/",
-  JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page,
-);
+// --- Legacy migration ------------------------------------------------------
 
-const idxDom = new JSDOM(page, { url: "https://example.com/", runScripts: "outside-only" });
-idxDom.window.eval(code);
-await new Promise((r) => setTimeout(r, 0));
-idxDom.window.document.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new idxDom.window.MouseEvent("click", { bubbles: true }));
-check(
-  "index page recorded as index",
-  JSON.parse(idxDom.window.localStorage.getItem("quartz:inventory"))[0]?.page === "index",
-  JSON.parse(idxDom.window.localStorage.getItem("quartz:inventory"))[0]?.page,
-);
-
-// --- Plain text entries ---------------------------------------------------
-check("entries are plain text, not links", doc.querySelectorAll("[data-inventory-items] a").length === 0);
-
-// --- Categories -----------------------------------------------------------
-const longName = "Lorem Ipsum ladada blablaba domi con fore concordia london big ben dollar";
-const catDom = new JSDOM(
-  page
-    .replace(/<figure[\s\S]*?<\/figure>/g, "")
-    .replace(
-      '<div class="page-content">',
-      `<div class="page-content">
-        <figure><pre data-language="item"><code data-language="item"><span data-line><span>${longName}</span></span></code></pre></figure>
-        <figure><pre data-language="secret"><code data-language="secret"><span data-line><span>Hidden Vault</span></span></code></pre></figure>`,
-    ),
-  { url: "https://example.com/gear", runScripts: "outside-only" },
-);
-catDom.window.eval(code);
-await new Promise((r) => setTimeout(r, 0));
-const cDoc = catDom.window.document;
-const catToggles = cDoc.querySelectorAll("[data-inventory-item-toggle]");
-check("blocks of every known category get a button", catToggles.length === 2, `${catToggles.length}`);
-[...catToggles].forEach((b) => b.dispatchEvent(new catDom.window.MouseEvent("click", { bubbles: true })));
-const catEntries = JSON.parse(catDom.window.localStorage.getItem("quartz:inventory"));
-check("item fence stored as category 'item'", catEntries.find((e) => e.title === longName)?.category === "item", JSON.stringify(catEntries.map((e) => [e.title, e.category])));
-check("secret fence stored as category 'secret'", catEntries.find((e) => e.title === "Hidden Vault")?.category === "secret", JSON.stringify(catEntries.map((e) => [e.title, e.category])));
-check("full title stored, not truncated", catEntries.find((e) => e.title === longName)?.title === longName);
-const cNames = [...cDoc.querySelectorAll("[data-inventory-items] .inventory-name")];
-const cLong = cNames.find((n) => n.getAttribute("title") === longName);
-check("long title is elided in the preview (20 chars + ...)", cLong?.textContent === "Lorem Ipsum ladada b...", cLong?.textContent);
-check("short titles are not elided", [...cDoc.querySelectorAll("[data-inventory-items] .inventory-name")].some((n) => n.textContent === "Hidden Vault"));
-check("entries show their category", [...cDoc.querySelectorAll("[data-inventory-items] .inventory-tag")].map((t) => t.textContent).sort().join(",") === "item,secret");
-check("legacy entries without a category load as 'item'", await (async () => {
-  const legacy = new JSDOM(page, { url: "https://example.com/gear", runScripts: "outside-only" });
-  legacy.window.localStorage.setItem("quartz:inventory", JSON.stringify([
-    { slug: "gear#old", title: "Old Entry", page: "gear", anchor: "old", addedAt: "2020-01-01T00:00:00.000Z" },
-  ]));
-  legacy.window.eval(code);
-  await new Promise((r) => setTimeout(r, 0));
-  return legacy.window.document.querySelector(".inventory-tag")?.textContent === "item";
-})());
+const LEGACY_PAYLOAD = JSON.stringify([
+  { slug: "gear#old", title: "Old Item", addedAt: "2018-02-02T00:00:00.000Z", page: "gear", anchor: "old" },
+]);
+const legacyDom = boot(page, "https://example.com/gear", (window) => {
+  // A pre-IndexedDB inventory, present before the runtime boots.
+  window.localStorage.setItem("quartz:inventory", LEGACY_PAYLOAD);
+});
+await settle(120);
+const legacyRows = legacyDom.window.document.querySelectorAll("[data-inventory-items] .inventory-entry");
+check("legacy localStorage inventory is migrated on load", legacyRows.length === 1, `${legacyRows.length}`);
+check("migrated entry is normalised", nameOf(legacyDom.window.document.querySelector("[data-inventory-items]")) === "Old Item" && legacyDom.window.document.querySelector("[data-inventory-items] .inventory-quantity").textContent === "\u00d71");
+check("legacy localStorage key is removed", legacyDom.window.localStorage.getItem("quartz:inventory") === null);
 
 console.log(results.join("\n"));
 process.exit(results.some((r) => r.startsWith("FAIL")) ? 1 : 0);

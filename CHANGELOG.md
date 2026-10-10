@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Breaking (storage):** the inventory moved from `localStorage` to **IndexedDB**
+  via Dexie (`<storageKey>:db`, table `items`). Existing inventories are migrated
+  once on first open, and the old `localStorage` key is removed.
+- Entries now record `name`, `quantity`, `location` and `timestamp`. Quantity and
+  location can be declared in the fence (`x3`, `Location: …`) and are editable in
+  the "Show all" modal; the panel previews them.
+- The runtime requests **persistent storage** (`navigator.storage.persist()`) so
+  the inventory survives "clear site data".
 - Stash buttons now mount on every page (even without an inventory panel) and are
   re-mounted after client-side navigation.
 - Fixed one-line ```item fences rendering empty; only genuinely blank rendered

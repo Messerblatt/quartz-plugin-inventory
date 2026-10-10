@@ -34,7 +34,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/inline-runtime.test.mjs",
+    "test": "npm run build && node test/storage.test.mjs && node test/inline-runtime.test.mjs",
     "check": "npm run typecheck && npm run test",
     "prepublishOnly": "npm run build"
   },
@@ -47,11 +47,14 @@
     }
   },
   "dependencies": {
-    "@quartz-community/types": "^1.0.0"
+    "@quartz-community/types": "^1.0.0",
+    "dexie": "^4.4.6"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
     "esbuild": "^0.25.0",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.1.2",
     "preact": "^10.28.2",
     "sass": "^1.97.3",
     "tsup": "^8.5.0",

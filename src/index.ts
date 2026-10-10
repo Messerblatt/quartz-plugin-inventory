@@ -10,7 +10,10 @@ export {
   addEntry,
   isInventoryEntry,
   isItemCategory,
+  itemDetailsFromBlock,
   itemNameFromBlock,
+  normalizeEntry,
+  normalizeQuantity,
   parseInventory,
   removeEntry,
   serializeInventory,
@@ -19,7 +22,16 @@ export {
   toggleEntry,
   truncateTitle,
 } from "./lib/inventory";
-export type { InventoryEntry, ItemCategory } from "./lib/inventory";
+export type { InventoryEntry, ItemCategory, ItemDetails } from "./lib/inventory";
+
+export {
+  DexieInventoryStore,
+  InventoryDb,
+  databaseName,
+  openInventoryStore,
+  requestPersistentStorage,
+} from "./lib/db";
+export type { InventoryStore, MetaRecord } from "./lib/db";
 
 export type {
   QuartzComponent,

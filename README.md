@@ -2,7 +2,7 @@
 
 Inventory ("Rucksack") component for [Quartz v5](https://quartz.jzhao.xyz).
 Notes written in Obsidian, published with Quartz — this plugin lets readers stash
-notes into a persistent, `localStorage`-backed backpack.
+items into a persistent, IndexedDB-backed backpack.
 
 ## Features
 
@@ -11,6 +11,22 @@ notes into a persistent, `localStorage`-backed backpack.
 - Any fenced block whose language is a known category is stowable: ` ```item `
   (default), plus ` ```event ` and ` ```secret `. The category is stored with the
   entry and shown as a tag next to it.
+- Every stashed item records its **name**, **quantity**, **location** and a
+  **timestamp**. Quantity and location can be written straight in the fence:
+
+  ````markdown
+  ```item
+  Diesel
+  x3
+  Location: Cellar, shelf 2
+  ```
+  ````
+
+  and edited later in the "Show all" modal (saved as you type).
+- Storage is **IndexedDB via [Dexie](https://dexie.org)**, not localStorage, so
+  the inventory is not capped at a few megabytes and can grow.
+- The plugin asks the browser for **persistent storage**
+  (`navigator.storage.persist()`), so the inventory survives "clear site data".
 - A collapsible **Inventory** panel (right sidebar by default) with a count badge.
 - A **"Show all"** button that opens a modal with the full inventory — themed via
   Quartz CSS variables, closes on backdrop click, `Esc` or the × button.
@@ -19,7 +35,7 @@ notes into a persistent, `localStorage`-backed backpack.
 - Remove single entries, or clear the whole inventory from the modal.
 - Entries render as plain text (no links); names longer than 20 characters are
   shown as the first 20 characters plus `…`, with the full name in the `title`
-  tooltip. The stored title is never truncated.
+  tooltip. The stored name is never truncated.
 - Pure CSS, respects `prefers-color-scheme` via Quartz CSS variables.
 
 ## Install
@@ -55,50 +71,68 @@ Inventory({
 
 ## Storage format
 
-`localStorage["quartz:inventory"]` (configurable):
+IndexedDB database `"<storageKey>:db"` (default `quartz:inventory:db`), table
+`items` keyed by `slug`:
 
 ```json
-[
-  {
-    "slug": "notes/gear/#diesel",
-    "title": "Diesel",
-    "page": "notes/gear/",
-    "anchor": "diesel",
-    "addedAt": "2026-10-09T19:10:20.029Z",
-    "category": "item"
-  }
-]
+{
+  "slug": "notes/gear/#diesel",
+  "name": "Diesel",
+  "category": "item",
+  "quantity": 3,
+  "location": "Cellar, shelf 2",
+  "timestamp": "2026-10-09T19:10:20.029Z",
+  "page": "notes/gear/",
+  "anchor": "diesel"
+}
 ```
 
 `page` is the page path as the browser sees it (no leading slash).
-`category` is the fence language (`item`, `event`, `secret`); entries written
-before categories existed are read back as `item`.
+`category` is the fence language (`item`, `event`, `secret`).
+
+A pre-IndexedDB inventory in `localStorage["quartz:inventory"]` is migrated
+once, on first open, and the old key is removed afterwards. Records without a
+category/quantity/location are upgraded with `item` / `1` / `""`.
+
+The panel's open/closed flag stays in `localStorage` (`quartz:inventory:open`),
+since it must be readable synchronously while the page renders.
 
 ### Categories
 
 `ITEM_CATEGORIES` lists the stowable fence languages; add one there to make a
 new kind of block stashable, and it is stored and rendered automatically.
 
-Pure helpers for this format live in `src/lib/inventory.ts` and are exported:
+Pure helpers for this format live in `src/lib/inventory.ts` (model) and
+`src/lib/db.ts` (Dexie/IndexedDB), and both are exported:
 
 ```ts
 import {
-  addEntry,
+  itemDetailsFromBlock,
+  normalizeQuantity,
+  openInventoryStore,
   parseInventory,
-  removeEntry,
-  serializeInventory,
+  requestPersistentStorage,
   sortInventory,
-  toggleEntry,
   truncateTitle,
 } from "@quartz-community/plugin-inventory";
 ```
 
-## Storage keys
+```ts
+const store = await openInventoryStore("quartz:inventory");
+const items = await store.all();          // newest first
+await store.put({ slug: "gear#diesel", name: "Diesel", category: "item",
+                  quantity: 3, location: "Cellar",
+                  timestamp: new Date().toISOString(), page: "gear", anchor: "diesel" });
+```
 
-| Key | Purpose |
+## Storage
+
+| Store | Purpose |
 | --- | --- |
-| `quartz:inventory` | the entries array |
-| `quartz:inventory:open` | panel open/closed state |
+| IndexedDB `quartz:inventory:db` → `items` | the stashed items |
+| IndexedDB `quartz:inventory:db` → `meta` | one-shot migration flag |
+| `localStorage` `quartz:inventory:open` | panel open/closed state |
+| `localStorage` `quartz:inventory` | legacy inventory, migrated once |
 
 ## Development
 
@@ -115,7 +149,8 @@ npm run check      # typecheck + build + browser runtime tests
 ```text
 src/
 ├── index.ts
-├── lib/inventory.ts                       # storage model + pure helpers
+├── lib/inventory.ts                       # data model + pure helpers
+├── lib/db.ts                              # Dexie/IndexedDB store + persistence
 └── components/
     ├── Inventory.tsx                      # QuartzComponent
     ├── scripts/inventory.inline.ts        # browser runtime (transpiled to a JS string)

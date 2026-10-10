@@ -77,6 +77,11 @@ export default ((opts?: InventoryOptions) => {
               </button>
             </div>
 
+            <p class="inventory-modal-hint">
+              Adjust quantity and where each item was found; changes are saved
+              automatically.
+            </p>
+
             <ul class="inventory-list inventory-modal-list" data-inventory-modal-items></ul>
 
             <div class="inventory-actions">
