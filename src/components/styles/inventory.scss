@@ -197,8 +197,9 @@ html.inventory-modal-open body {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    // Centered like Quartz's own modals, with a readable max width.
-    width: min(32rem, calc(100vw - 2rem));
+    // Wide enough that every item stays on a single line: name, category,
+    // quantity, location, date and remove button never wrap.
+    width: min(52rem, calc(100vw - 2rem));
     max-height: min(70vh, 40rem);
     margin: 10vh auto 0;
     padding: 1rem 1.25rem 1.25rem;
@@ -257,43 +258,32 @@ html.inventory-modal-open body {
     gap: 0.25rem;
   }
 
+  // One item = one line: a single grid row per entry, nothing wraps.
   .inventory-entry {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 1fr) auto auto minmax(0, 12rem) auto auto;
+    align-items: center;
+    gap: 0.6rem;
     padding: 0.45rem 0.5rem;
     border-radius: 0.35rem;
     background: $inv-surface-alt;
+    white-space: nowrap;
   }
 
-  // Quantity and location are editable in the modal; the panel only previews them.
-  .inventory-entry {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  input.inventory-quantity,
-  input.inventory-location {
+  .inventory-name,
+  .inventory-location {
     min-width: 0;
-    padding: 0.15rem 0.35rem;
-    border: 1px solid $inv-border;
-    border-radius: 0.3rem;
-    background: $inv-bg;
-    color: inherit;
-    font: inherit;
-    font-size: 0.75rem;
-
-    &:focus {
-      outline: none;
-      border-color: $inv-accent;
-    }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  input.inventory-quantity {
-    width: 3.6rem;
-  }
-
-  input.inventory-location {
-    width: 8rem;
+  .inventory-meta,
+  .inventory-quantity,
+  .inventory-tag,
+  .inventory-remove {
+    flex: none;
   }
 }
 

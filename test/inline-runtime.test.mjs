@@ -209,7 +209,7 @@ check("modal stays open on inner click", modal.hasAttribute("hidden") === false)
 doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 check("modal closes via Escape", modal.hasAttribute("hidden") === true);
 
-// --- Quantity & location editing -------------------------------------------
+// --- Quantity & location are read-only ------------------------------------
 
 click(remounted[0]); // stash Diesel
 await settle();
@@ -217,20 +217,10 @@ click(showAll);
 await settle();
 const dieselRow = () =>
   doc.querySelector('[data-inventory-modal-items] [data-inventory-slug="gear#diesel"]');
-check("modal exposes a quantity input", dieselRow().querySelector(".inventory-quantity").tagName === "INPUT");
-check("modal exposes a location input", dieselRow().querySelector(".inventory-location").tagName === "INPUT");
-
-const quantityInput = dieselRow().querySelector(".inventory-quantity");
-quantityInput.value = "5";
-quantityInput.dispatchEvent(new window.Event("change", { bubbles: true }));
-await settle();
-check("panel preview follows the new quantity", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-quantity').textContent === "\u00d75", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-quantity').textContent);
-
-const locationInput = dieselRow().querySelector(".inventory-location");
-locationInput.value = "Cellar, shelf 2";
-locationInput.dispatchEvent(new window.Event("change", { bubbles: true }));
-await settle();
-check("panel preview follows the new location", doc.querySelector('[data-inventory-items] [data-inventory-slug="gear#diesel"] .inventory-location').textContent === "Cellar, shelf 2");
+check("quantity is read-only text", dieselRow().querySelector(".inventory-quantity").tagName === "SPAN");
+check("location is read-only text", dieselRow().querySelector(".inventory-location").tagName === "SPAN");
+check("no editable fields anywhere in the modal", doc.querySelectorAll("[data-inventory-modal] input, [data-inventory-modal] textarea").length === 0);
+check("no editable fields in the panel", doc.querySelectorAll("[data-inventory-items] input, [data-inventory-items] textarea").length === 0);
 
 const readStored = () =>
   new Promise((resolve, reject) => {
@@ -243,8 +233,9 @@ const readStored = () =>
     req.onerror = () => reject(req.error);
   });
 const diesel = await readStored();
-check("quantity persisted to IndexedDB", diesel?.quantity === 5, JSON.stringify(diesel));
-check("location persisted to IndexedDB", diesel?.location === "Cellar, shelf 2");
+check("quantity persisted to IndexedDB", diesel?.quantity === 1, JSON.stringify(diesel));
+check("location persisted to IndexedDB", diesel?.location === "");
+check("entry records its origin block", JSON.stringify(diesel?.origins) === JSON.stringify(["gear#diesel"]), JSON.stringify(diesel?.origins));
 
 // Unstashing drops the record; re-stashing starts from the fence hints again.
 click(doc.querySelector('[data-inventory-item-toggle="gear#diesel"]'));
@@ -256,18 +247,53 @@ const restored = await readStored();
 check("re-stashing falls back to the fence defaults", restored?.quantity === 1 && restored?.location === "", JSON.stringify(restored));
 check("re-stashing records a fresh timestamp", typeof restored?.timestamp === "string" && restored.timestamp !== "");
 
-// Put the edited values back for the checks that follow.
-click(showAll);
+// --- Identical items merge into one row -----------------------------------
+
+const dupDom = boot(pageFor(`${itemFigure("health")}\n${itemFigure("health")}`), "https://example.com/gear");
 await settle();
-const dRow = doc.querySelector('[data-inventory-modal-items] [data-inventory-slug="gear#diesel"]');
-const q2 = dRow.querySelector(".inventory-quantity");
-q2.value = "5";
-q2.dispatchEvent(new window.Event("change", { bubbles: true }));
+const dDoc = dupDom.window.document;
+const dupToggles = dDoc.querySelectorAll("[data-inventory-item-toggle]");
+check("both 'health' blocks get a button", dupToggles.length === 2, `${dupToggles.length}`);
+click(dupToggles[0]);
 await settle();
-const l2 = dRow.querySelector(".inventory-location");
-l2.value = "Cellar, shelf 2";
-l2.dispatchEvent(new window.Event("change", { bubbles: true }));
+check("first stash adds one row", dDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
+click(dupToggles[1]);
 await settle();
+check("second identical stash does not add a row", dDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1, `${dDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length}`);
+check("identical stash raises the quantity", dDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent === "\u00d72", dDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent);
+check("both blocks are marked as stashed", [...dupToggles].every((b) => /\u2713 Stashed/.test(b.textContent)));
+check("both blocks hide their text", dDoc.querySelectorAll(".inventory-item-block.is-stashed-item").length === 2);
+
+const dupRows = await new Promise((resolve, reject) => {
+  const req = dupDom.window.indexedDB.open("quartz:inventory:db");
+  req.onsuccess = () => {
+    const get = req.result.transaction("items").objectStore("items").getAll();
+    get.onsuccess = () => resolve(get.result);
+    get.onerror = () => reject(get.error);
+  };
+  req.onerror = () => reject(req.error);
+});
+check("only one record is stored", dupRows.length === 1, `${dupRows.length}`);
+check("merged record keeps both origins", JSON.stringify(dupRows[0].origins) === JSON.stringify(["gear#health", "gear#health-1"]), JSON.stringify(dupRows[0].origins));
+
+// Taking one of them back out only removes what it contributed.
+click(dupToggles[1]);
+await settle();
+check("unstashing one copy keeps the row", dDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
+check("unstashing one copy lowers the quantity", dDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent === "\u00d71", dDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent);
+check("the other block stays stashed", /\u2713 Stashed/.test(dupToggles[0].textContent));
+click(dupToggles[0]);
+await settle();
+check("unstashing the last copy removes the row", dDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 0);
+
+// Fenced quantities add up when identical items merge.
+const mergeDom = boot(pageFor(`${itemFigure("rope\nx3")}\n${itemFigure("rope\nx2")}`), "https://example.com/gear");
+await settle();
+const mDoc = mergeDom.window.document;
+[...mDoc.querySelectorAll("[data-inventory-item-toggle]")].forEach((b) => click(b));
+await settle();
+check("fenced quantities are summed on merge", mDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent === "\u00d75", mDoc.querySelector("[data-inventory-items] .inventory-quantity").textContent);
+check("merged rows keep a single line", mDoc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
 
 // --- Quantity/location hints in the fence ----------------------------------
 

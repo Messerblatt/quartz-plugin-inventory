@@ -26,7 +26,9 @@ import {
   isItemCategory,
   itemDetailsFromBlock,
   itemNameFromBlock,
-  normalizeQuantity,
+  addStashedItem,
+  mergeKeyFor,
+  removeStashedItem,
   slugify,
   sortInventory,
   truncateTitle,
@@ -126,6 +128,7 @@ interface DiscoveredItem {
   name: string;
   slug: string;
   anchor: string;
+  mergeKey: string;
   category: ItemCategory;
   quantity: number;
   location: string;
@@ -206,7 +209,18 @@ function discoverItems(): DiscoveredItem[] {
     el.classList.add("inventory-item-block");
     el.classList.add(`inventory-item-block--${category}`);
 
-    items.push({ el, name, slug, anchor, category, quantity, location });
+    items.push({
+      el,
+      name,
+      slug,
+      anchor,
+      // Identical names are one inventory row: stashing a second "health"
+      // raises the quantity of the first instead of adding a duplicate.
+      mergeKey: mergeKeyFor(name, category),
+      category,
+      quantity,
+      location,
+    });
   }
 
   return items;
@@ -217,11 +231,13 @@ function discoverItems(): DiscoveredItem[] {
 function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEntry {
   return {
     slug: item.slug,
+    mergeKey: item.mergeKey,
     name: item.name,
     category: item.category,
-    quantity: existing?.quantity ?? item.quantity,
-    location: existing?.location ?? item.location,
+    quantity: item.quantity,
+    location: item.location,
     timestamp: existing?.timestamp ?? new Date().toISOString(),
+    origins: existing?.origins ?? [item.slug],
     page: currentPage(),
     anchor: item.anchor,
   };
@@ -229,10 +245,16 @@ function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEnt
 
 // --- Rendering -------------------------------------------------------------
 
-/** Keep every item button (and its block) on the page in sync with stored state. */
+/**
+ * Keep every item button (and its block) on the page in sync with stored state.
+ *
+ * State is tracked per block (`origins`), not per row: two blocks named
+ * "health" merge into a single inventory row, but each keeps its own button and
+ * only hides its own text once it has been stashed itself.
+ */
 function refreshItemButtons(entries: InventoryEntry[]) {
   const isStashed = (slug: string | null) =>
-    slug != null && entries.some((e) => e.slug === slug);
+    slug != null && entries.some((e) => e.origins.includes(slug));
 
   for (const button of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
@@ -243,14 +265,15 @@ function refreshItemButtons(entries: InventoryEntry[]) {
     button.classList.toggle("is-stashed", stashed);
   }
 
-  // Drive the blocks from their slug (page#anchor) rather than by DOM position,
-  // so panel-only updates work even when the block was mounted elsewhere.
   const page = currentPage();
   for (const el of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
   )) {
     const anchor = el.getAttribute("data-inventory-item");
-    el.classList.toggle("is-stashed-item", anchor != null && isStashed(`${page}#${anchor}`));
+    el.classList.toggle(
+      "is-stashed-item",
+      anchor != null && entries.some((e) => e.origins.includes(`${page}#${anchor}`)),
+    );
   }
 }
 
@@ -287,11 +310,16 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
       "[data-inventory-items], [data-inventory-modal-items]",
     ),
   )) {
-    fillList(list, entries, list.hasAttribute("data-inventory-modal-items"));
+    fillList(list, entries);
   }
 }
 
-function fillList(list: HTMLElement, entries: InventoryEntry[], detailed: boolean) {
+/**
+ * One entry per line: name, category, quantity, location, date and the remove
+ * button. All metadata is read-only - it comes from the fence and is never
+ * edited in the UI.
+ */
+function fillList(list: HTMLElement, entries: InventoryEntry[]) {
   list.textContent = "";
 
   for (const entry of sortInventory(entries)) {
@@ -315,36 +343,16 @@ function fillList(list: HTMLElement, entries: InventoryEntry[], detailed: boolea
     category.className = "inventory-tag";
     category.textContent = entry.category;
 
-    const quantity = document.createElement(detailed ? "input" : "span");
+    const quantity = document.createElement("span");
     quantity.className = "inventory-quantity";
-    quantity.setAttribute("data-inventory-quantity", entry.slug);
-    quantity.setAttribute("aria-label", `Quantity of ${entry.name}`);
-    if (detailed) {
-      const input = quantity as HTMLInputElement;
-      input.type = "number";
-      input.min = "1";
-      input.max = "999";
-      input.value = String(entry.quantity);
-      input.title = "Quantity";
-    } else {
-      quantity.textContent = `\u00d7${entry.quantity}`;
-      quantity.title = `Quantity: ${entry.quantity}`;
-    }
+    quantity.textContent = `\u00d7${entry.quantity}`;
+    quantity.title = `Quantity: ${entry.quantity}`;
 
-    const location = document.createElement(detailed ? "input" : "span");
+    const location = document.createElement("span");
     location.className = "inventory-location";
-    location.setAttribute("data-inventory-location", entry.slug);
-    location.setAttribute("aria-label", `Where ${entry.name} was found`);
-    if (detailed) {
-      const input = location as HTMLInputElement;
-      input.type = "text";
-      input.placeholder = "Where found?";
-      input.value = entry.location;
-    } else {
-      location.textContent = entry.location;
-      location.hidden = entry.location.length === 0;
-      if (entry.location) location.title = `Found in ${entry.location}`;
-    }
+    location.textContent = entry.location;
+    location.hidden = entry.location.length === 0;
+    if (entry.location) location.title = `Found in ${entry.location}`;
 
     const meta = document.createElement("span");
     meta.className = "inventory-meta";
@@ -392,6 +400,7 @@ function mountItemButton(
   button.type = "button";
   button.className = "inventory-item-toggle";
   button.setAttribute("data-inventory-item-toggle", item.slug);
+  button.setAttribute("data-inventory-merge-key", item.mergeKey);
   button.setAttribute("aria-label", `Stash ${item.name} in your inventory`);
 
   const sync = () => {
@@ -399,8 +408,6 @@ function mountItemButton(
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
-    // A stashed item keeps its block (and anchor) but shows no text.
-    item.el.classList.toggle("is-stashed-item", stashed);
   };
 
   sync();
@@ -420,7 +427,7 @@ async function mountItems() {
     mountItemButton(
       item,
       storageKey,
-      (slug) => entries.some((e) => e.slug === slug),
+      (slug) => entries.some((e) => e.origins.includes(slug)),
       (target) => void toggleItem(store, target),
     );
   }
@@ -428,14 +435,38 @@ async function mountItems() {
   refreshItemButtons(entries);
 }
 
-/** Stash / unstash a block, then repaint everything from the store. */
+/**
+ * Stash / unstash a block, then repaint everything from the store.
+ *
+ * Identical items (same `mergeKey`) collapse into one row: stashing a second
+ * "health" raises the quantity of the existing row and records the new origin
+ * instead of adding a duplicate. Unstashing a block takes back exactly the
+ * quantity that block contributed.
+ */
 async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
-  const existing = await store.get(item.slug);
-  if (existing) {
-    await store.remove(item.slug);
-  } else {
+  const existing = await store.getByMergeKey(item.mergeKey);
+
+  if (!existing) {
     await store.put(entryFor(item));
+    syncAll(await store.all());
+    return;
   }
+
+  // This very block is already stashed -> take it back out.
+  if (existing.origins.includes(item.slug)) {
+    const [kept] = removeStashedItem(
+      { slug: item.slug, mergeKey: item.mergeKey, quantity: item.quantity },
+      [existing],
+    );
+    if (!kept) await store.remove(existing.slug);
+    else await store.put(kept);
+    syncAll(await store.all());
+    return;
+  }
+
+  // Another block of the same item: merge into the existing row.
+  const [merged] = addStashedItem(entryFor(item, existing), [existing]);
+  if (merged) await store.put(merged);
   syncAll(await store.all());
 }
 
@@ -527,39 +558,14 @@ async function initRoot(root: HTMLElement) {
     if (event.key === "Escape" && modal && !modal.hasAttribute("hidden")) closeDialog();
   });
 
-  // Remove buttons, and the quantity/location editors of the modal, are handled
-  // by delegation so the lists can be re-rendered freely.
+  // Item metadata (name, quantity, location) is read-only, so the only action
+  // in the lists is removing an entry. Delegated so lists can be re-rendered.
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
     const slug = target?.getAttribute?.("data-inventory-remove");
     if (!slug) return;
     event.preventDefault();
     void update((s) => s.remove(slug));
-  });
-
-  root.addEventListener("change", (event) => {
-    const target = event.target as HTMLInputElement | null;
-    if (!target?.getAttribute) return;
-
-    const slug = target.getAttribute("data-inventory-quantity");
-    if (slug) {
-      const quantity = normalizeQuantity(target.value);
-      target.value = String(quantity);
-      void update(async (s) => {
-        const entry = await s.get(slug);
-        if (entry) await s.put({ ...entry, quantity });
-      });
-      return;
-    }
-
-    const locationSlug = target.getAttribute("data-inventory-location");
-    if (locationSlug) {
-      const location = target.value.trim();
-      void update(async (s) => {
-        const entry = await s.get(locationSlug);
-        if (entry) await s.put({ ...entry, location });
-      });
-    }
   });
 
   if (read(openKey) === "1") setOpen(true);

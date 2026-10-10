@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Item metadata is now **immutable**: quantity and location are read-only in the
+  UI and come from the fence only. The "Show all" modal no longer offers editors.
+- Identical items **merge** into one row (`mergeKey` = category + slugified
+  name): stashing a second `health` raises the quantity instead of adding a
+  duplicate row. Each stashed block is tracked in `origins`, so unstashing a
+  block takes back only what that block contributed. Records from before this
+  change are collapsed on read.
+- The "Show all" modal is wider and renders **one item per line** — nothing
+  wraps, long names and locations are ellipsised.
+
 - **Breaking (storage):** the inventory moved from `localStorage` to **IndexedDB**
   via Dexie (`<storageKey>:db`, table `items`). Existing inventories are migrated
   once on first open, and the old `localStorage` key is removed.

@@ -12,7 +12,8 @@ items into a persistent, IndexedDB-backed backpack.
   (default), plus ` ```event ` and ` ```secret `. The category is stored with the
   entry and shown as a tag next to it.
 - Every stashed item records its **name**, **quantity**, **location** and a
-  **timestamp**. Quantity and location can be written straight in the fence:
+  **timestamp**. Quantity and location come from the fence and are **read-only**
+  in the UI — item metadata is never edited by the reader:
 
   ````markdown
   ```item
@@ -22,14 +23,17 @@ items into a persistent, IndexedDB-backed backpack.
   ```
   ````
 
-  and edited later in the "Show all" modal (saved as you type).
+- Identical items merge: stashing a second `health` raises the quantity of the
+  existing `health` row instead of adding a duplicate. Stashing the same item
+  again from another page adds its fenced quantity to the same row.
 - Storage is **IndexedDB via [Dexie](https://dexie.org)**, not localStorage, so
   the inventory is not capped at a few megabytes and can grow.
 - The plugin asks the browser for **persistent storage**
   (`navigator.storage.persist()`), so the inventory survives "clear site data".
 - A collapsible **Inventory** panel (right sidebar by default) with a count badge.
 - A **"Show all"** button that opens a modal with the full inventory — themed via
-  Quartz CSS variables, closes on backdrop click, `Esc` or the × button.
+  Quartz CSS variables, closes on backdrop click, `Esc` or the × button. Every
+  item occupies exactly one line (long values are ellipsised, never wrapped).
 - Entries persist across pages, reloads and builds — they live in the reader's
   browser only, never on the server.
 - Remove single entries, or clear the whole inventory from the modal.
@@ -77,11 +81,13 @@ IndexedDB database `"<storageKey>:db"` (default `quartz:inventory:db`), table
 ```json
 {
   "slug": "notes/gear/#diesel",
+  "mergeKey": "item:diesel",
   "name": "Diesel",
   "category": "item",
   "quantity": 3,
   "location": "Cellar, shelf 2",
   "timestamp": "2026-10-09T19:10:20.029Z",
+  "origins": ["notes/gear/#diesel", "shop/gear/#diesel"],
   "page": "notes/gear/",
   "anchor": "diesel"
 }
@@ -89,10 +95,15 @@ IndexedDB database `"<storageKey>:db"` (default `quartz:inventory:db`), table
 
 `page` is the page path as the browser sees it (no leading slash).
 `category` is the fence language (`item`, `event`, `secret`).
+`mergeKey` (`category:slugified name`) is what de-duplicates items; `origins`
+lists every block that contributed to the row, so unstashing a block only takes
+back what that block added.
 
 A pre-IndexedDB inventory in `localStorage["quartz:inventory"]` is migrated
 once, on first open, and the old key is removed afterwards. Records without a
-category/quantity/location are upgraded with `item` / `1` / `""`.
+category/quantity/location are upgraded with `item` / `1` / `""`, and records
+without a `mergeKey` get one on read (leftover duplicates then collapse into a
+single row with a summed quantity).
 
 The panel's open/closed flag stays in `localStorage` (`quartz:inventory:open`),
 since it must be readable synchronously while the page renders.
@@ -107,10 +118,13 @@ Pure helpers for this format live in `src/lib/inventory.ts` (model) and
 
 ```ts
 import {
+  addStashedItem,
   itemDetailsFromBlock,
+  mergeKeyFor,
   normalizeQuantity,
   openInventoryStore,
   parseInventory,
+  removeStashedItem,
   requestPersistentStorage,
   sortInventory,
   truncateTitle,
@@ -119,10 +133,11 @@ import {
 
 ```ts
 const store = await openInventoryStore("quartz:inventory");
-const items = await store.all();          // newest first
-await store.put({ slug: "gear#diesel", name: "Diesel", category: "item",
-                  quantity: 3, location: "Cellar",
-                  timestamp: new Date().toISOString(), page: "gear", anchor: "diesel" });
+const items = await store.all();          // newest first, duplicates merged
+await store.put({ slug: "gear#diesel", mergeKey: mergeKeyFor("Diesel", "item"),
+                  name: "Diesel", category: "item", quantity: 3, location: "Cellar",
+                  timestamp: new Date().toISOString(), origins: ["gear#diesel"],
+                  page: "gear", anchor: "diesel" });
 ```
 
 ## Storage

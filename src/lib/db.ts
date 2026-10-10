@@ -13,6 +13,7 @@ import Dexie, { type Table } from "dexie";
 import {
   DEFAULT_STORAGE_KEY,
   normalizeEntry,
+  normalizeQuantity,
   parseInventory,
   type InventoryEntry,
 } from "./inventory.ts";
@@ -34,19 +35,26 @@ export class InventoryDb extends Dexie {
 
   constructor(storageKey: string = DEFAULT_STORAGE_KEY) {
     super(databaseName(storageKey));
-    // slug is the primary key; timestamp/category are indexed for sorting and
-    // the category filters planned for ```event / ```secret.
+    // slug is the primary key; mergeKey resolves identical items to a single
+    // row, timestamp/category are indexed for sorting and the category filters
+    // planned for ```event / ```secret.
     this.version(1).stores({
       items: "slug, timestamp, category",
+      meta: "key",
+    });
+    this.version(2).stores({
+      items: "slug, timestamp, category, mergeKey",
       meta: "key",
     });
   }
 }
 
 export interface InventoryStore {
-  /** All entries, newest first. */
+  /** All entries, newest first, duplicates already merged. */
   all(): Promise<InventoryEntry[]>;
   get(slug: string): Promise<InventoryEntry | undefined>;
+  /** The row a given item identity maps to, if the item is in the inventory. */
+  getByMergeKey(mergeKey: string): Promise<InventoryEntry | undefined>;
   /** Insert or update a single entry. */
   put(entry: InventoryEntry): Promise<void>;
   remove(slug: string): Promise<void>;
@@ -64,16 +72,44 @@ export class DexieInventoryStore implements InventoryStore {
   ) {}
 
   async all(): Promise<InventoryEntry[]> {
-    const entries = await this.db.items.toArray();
-    return entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const rows = await this.db.items.toArray();
+    // Records written before merging existed get their identity filled in, and
+    // any leftover duplicates (same mergeKey) collapse into the newest row.
+    const entries = rows
+      .map(normalizeEntry)
+      .filter((entry): entry is InventoryEntry => entry !== null);
+
+    const byMergeKey = new Map<string, InventoryEntry>();
+    for (const entry of entries) {
+      const seen = byMergeKey.get(entry.mergeKey);
+      if (!seen) {
+        byMergeKey.set(entry.mergeKey, entry);
+        continue;
+      }
+      const [newer, older] =
+        entry.timestamp.localeCompare(seen.timestamp) >= 0 ? [entry, seen] : [seen, entry];
+      byMergeKey.set(entry.mergeKey, {
+        ...newer,
+        quantity: normalizeQuantity(newer.quantity + older.quantity),
+        origins: [...new Set([...newer.origins, ...older.origins])],
+      });
+    }
+
+    return [...byMergeKey.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
   async get(slug: string): Promise<InventoryEntry | undefined> {
-    return this.db.items.get(slug);
+    const row = await this.db.items.get(slug);
+    return row ? (normalizeEntry(row) ?? undefined) : undefined;
+  }
+
+  async getByMergeKey(mergeKey: string): Promise<InventoryEntry | undefined> {
+    const row = await this.db.items.where("mergeKey").equals(mergeKey).first();
+    return row ? (normalizeEntry(row) ?? undefined) : undefined;
   }
 
   async put(entry: InventoryEntry): Promise<void> {
-    await this.db.items.put(entry);
+    await this.db.items.put(normalizeEntry(entry) ?? entry);
   }
 
   async remove(slug: string): Promise<void> {

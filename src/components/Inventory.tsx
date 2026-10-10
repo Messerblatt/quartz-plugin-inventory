@@ -78,8 +78,8 @@ export default ((opts?: InventoryOptions) => {
             </div>
 
             <p class="inventory-modal-hint">
-              Adjust quantity and where each item was found; changes are saved
-              automatically.
+              Items keep the quantity and location written in their fence. Stash
+              the same item again to add more of it.
             </p>
 
             <ul class="inventory-list inventory-modal-list" data-inventory-modal-items></ul>

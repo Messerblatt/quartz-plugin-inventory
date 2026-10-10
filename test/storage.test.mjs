@@ -8,11 +8,14 @@ import "fake-indexeddb/auto";
 
 const {
   DEFAULT_STORAGE_KEY,
+  addStashedItem,
   databaseName,
   itemDetailsFromBlock,
+  mergeKeyFor,
   normalizeEntry,
   normalizeQuantity,
   openInventoryStore,
+  removeStashedItem,
   requestPersistentStorage,
 } = await import("../dist/index.js");
 
@@ -22,11 +25,13 @@ const check = (name, cond, extra = "") =>
 
 const entry = (overrides = {}) => ({
   slug: "gear#diesel",
+  mergeKey: mergeKeyFor("Diesel", "item"),
   name: "Diesel",
   category: "item",
   quantity: 1,
   location: "",
   timestamp: "2026-10-10T10:00:00.000Z",
+  origins: ["gear#diesel"],
   page: "gear",
   anchor: "diesel",
   ...overrides,
@@ -74,6 +79,61 @@ check(
   JSON.stringify(legacy),
 );
 check("record without an id is rejected", normalizeEntry({ name: "x", timestamp: "t" }) === null);
+
+// --- Merging identical items -----------------------------------------------
+
+const health = entry({
+  slug: "gear#health",
+  mergeKey: mergeKeyFor("health", "item"),
+  name: "health",
+  anchor: "health",
+  origins: ["gear#health"],
+});
+
+check("merge key ignores case and punctuation", mergeKeyFor("Health!", "item") === mergeKeyFor("health", "item"));
+check("merge key separates categories", mergeKeyFor("health", "item") !== mergeKeyFor("health", "secret"));
+
+let merged = addStashedItem(
+  entry({
+    slug: "notes/gear#health",
+    mergeKey: health.mergeKey,
+    name: "health",
+    timestamp: "2026-10-12T10:00:00.000Z",
+    origins: ["notes/gear#health"],
+    page: "notes/gear",
+    anchor: "health",
+  }),
+  [health],
+);
+check("identical item merges into one row", merged.length === 1, `${merged.length}`);
+check("merge adds the quantities", merged[0].quantity === 2, JSON.stringify(merged[0]));
+check("merge records both origins", JSON.stringify(merged[0].origins) === JSON.stringify(["gear#health", "notes/gear#health"]));
+check("merge keeps the first timestamp", merged[0].timestamp === health.timestamp);
+
+const differentCategory = addStashedItem(
+  entry({ slug: "gear#health-secret", mergeKey: mergeKeyFor("health", "secret"), name: "health", category: "secret", origins: ["gear#health-secret"] }),
+  [health],
+);
+check("same name, different category stays separate", differentCategory.length === 2, `${differentCategory.length}`);
+
+merged = removeStashedItem({ slug: "notes/gear#health", mergeKey: health.mergeKey, quantity: 1 }, [merged[0]]);
+check("removing one origin keeps the row", merged.length === 1);
+check("removing one origin lowers the quantity", merged[0].quantity === 1);
+check("removing one origin drops it from origins", JSON.stringify(merged[0].origins) === JSON.stringify(["gear#health"]));
+
+merged = removeStashedItem({ slug: "gear#health", mergeKey: health.mergeKey, quantity: 1 }, [merged[0]]);
+check("removing the last origin removes the row", merged.length === 0);
+
+// Leftover duplicates from before merging existed collapse on read.
+const legacyDupes = await openInventoryStore("merge:inventory");
+await legacyDupes.put(entry({ slug: "gear#rope", mergeKey: "item:rope", name: "rope", origins: ["gear#rope"], quantity: 1 }));
+await legacyDupes.put(entry({ slug: "shop#rope", mergeKey: "item:rope", name: "rope", origins: ["shop#rope"], quantity: 2, timestamp: "2026-10-13T10:00:00.000Z" }));
+const deduped = await legacyDupes.all();
+check("duplicates collapse on read", deduped.length === 1, `${deduped.length}`);
+check("collapsed duplicates sum their quantities", deduped[0].quantity === 3, JSON.stringify(deduped[0]));
+check("collapsed duplicates keep every origin", deduped[0].origins.length === 2, JSON.stringify(deduped[0].origins));
+check("records without a merge key get one on read", (await legacyDupes.getByMergeKey(mergeKeyFor("rope", "item")))?.name === "rope");
+legacyDupes.close();
 
 // --- Store -----------------------------------------------------------------
 

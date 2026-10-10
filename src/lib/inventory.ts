@@ -6,8 +6,11 @@
  */
 
 export interface InventoryEntry {
-  /** Unique id: `page#anchor` of the block the item was stashed from. */
+  /** Unique id: `page#anchor` of the block the item was first stashed from. */
   slug: string;
+  /** Identity used for de-duplication: `category:slugified name`. Items with
+   *  the same merge key are a single row whose quantity grows. */
+  mergeKey: string;
   /** Name of the item, as written inside the fence (never truncated). */
   name: string;
   /** Fence language the item came from: "item", "event", "secret", … */
@@ -16,9 +19,11 @@ export interface InventoryEntry {
   quantity: number;
   /** Where the item was found, e.g. "Cellar, shelf 2". May be empty. */
   location: string;
-  /** ISO timestamp of when the item was stashed. */
+  /** ISO timestamp of when the item was first stashed. */
   timestamp: string;
-  /** Note slug the item was stashed from, kept for provenance. */
+  /** Every `page#anchor` this item was stashed from, newest last. */
+  origins: string[];
+  /** Note slug the item was first stashed from, kept for provenance. */
   page: string;
   /** Anchor id of the item block on that page. */
   anchor: string;
@@ -72,6 +77,15 @@ export function normalizeQuantity(value: unknown): number {
   return Math.max(1, Math.min(999, Math.round(parsed)));
 }
 
+/**
+ * Identity used to merge identical items: same category + same slugified name.
+ * Stashing "health" twice therefore grows one row's quantity instead of adding
+ * a second row.
+ */
+export function mergeKeyFor(name: string, category: ItemCategory): string {
+  return `${category}:${slugify(name) || "item"}`;
+}
+
 /** Fill in defaults for anything a stored record (or legacy payload) lacks. */
 export function normalizeEntry(value: unknown): InventoryEntry | null {
   if (typeof value !== "object" || value === null) return null;
@@ -88,16 +102,75 @@ export function normalizeEntry(value: unknown): InventoryEntry | null {
 
   if (!name || !slug || !timestamp) return null;
 
+  const category = isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY;
+
   return {
     slug,
+    mergeKey: mergeKeyFor(name, category),
     name,
-    category: isItemCategory(entry.category) ? entry.category : DEFAULT_CATEGORY,
+    category,
     quantity: normalizeQuantity(entry.quantity),
     location: typeof entry.location === "string" ? entry.location : "",
     timestamp,
+    origins: Array.isArray(entry.origins) && entry.origins.length > 0
+      ? entry.origins.filter((origin): origin is string => typeof origin === "string")
+      : [slug],
     page: typeof entry.page === "string" ? entry.page : "",
     anchor: typeof entry.anchor === "string" ? entry.anchor : "",
   };
+}
+
+/**
+ * Add a freshly stashed block to the inventory.
+ *
+ * Identical items (same `mergeKey`) collapse into a single row: the quantity
+ * grows, the new origin is remembered, and the original timestamp is kept.
+ */
+export function addStashedItem(
+  entry: InventoryEntry,
+  current: InventoryEntry[],
+): InventoryEntry[] {
+  const existing = current.find((e) => e.mergeKey === entry.mergeKey);
+
+  if (!existing) return [entry, ...current];
+
+  const origins = existing.origins.includes(entry.slug)
+    ? existing.origins
+    : [...existing.origins, entry.slug];
+
+  const merged: InventoryEntry = {
+    ...existing,
+    quantity: normalizeQuantity(existing.quantity + entry.quantity),
+    origins,
+  };
+
+  return [merged, ...current.filter((e) => e.mergeKey !== entry.mergeKey)];
+}
+
+/**
+ * Take a block back out of the inventory. Merged rows only lose the quantity
+ * contributed by that origin; the row disappears once nothing is left of it.
+ */
+export function removeStashedItem(
+  entry: Pick<InventoryEntry, "slug" | "mergeKey" | "quantity">,
+  current: InventoryEntry[],
+): InventoryEntry[] {
+  const existing = current.find((e) => e.mergeKey === entry.mergeKey);
+  if (!existing) return current;
+
+  if (!existing.origins.includes(entry.slug)) return current;
+
+  const origins = existing.origins.filter((origin) => origin !== entry.slug);
+  const quantity = existing.quantity - entry.quantity;
+
+  if (origins.length === 0 || quantity < 1) {
+    return current.filter((e) => e.mergeKey !== entry.mergeKey);
+  }
+
+  return [
+    { ...existing, origins, quantity },
+    ...current.filter((e) => e.mergeKey !== entry.mergeKey),
+  ];
 }
 
 /**
