@@ -49,7 +49,15 @@ const page = `<!doctype html><html><body>
     <div data-inventory-panel hidden>
       <p data-inventory-empty>empty</p>
       <ul data-inventory-items></ul>
-      <button type="button" data-inventory-clear hidden>Clear</button>
+      <button type="button" data-inventory-show-all hidden>Show all</button>
+    </div>
+    <div class="inventory-modal" data-inventory-modal hidden>
+      <div data-inventory-modal-backdrop></div>
+      <div class="inventory-modal-content" role="dialog" aria-modal="true" tabindex="-1">
+        <button type="button" data-inventory-modal-close>x</button>
+        <ul data-inventory-modal-items></ul>
+        <button type="button" data-inventory-clear hidden>Clear</button>
+      </div>
     </div>
   </aside>
 </body></html>`;
@@ -84,7 +92,7 @@ check("entry title parsed from fence text", stored[0]?.title === "Brille", store
 check("entry page recorded", stored[0]?.page === "gear", stored[0]?.page);
 check("count badge updated", doc.querySelector("[data-inventory-count]").textContent === "1", doc.querySelector("[data-inventory-count]").textContent);
 check("toggle flips to stashed", /\u2713 Stashed/.test(doc.querySelectorAll("[data-inventory-item-toggle]")[0].textContent));
-check("entry rendered in panel", doc.querySelectorAll("[data-inventory-entry], .inventory-entry").length === 1);
+check("entry rendered in panel", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1, `${doc.querySelectorAll("[data-inventory-items] .inventory-entry").length}`);
 check("link points back to anchor", doc.querySelector(".inventory-link").getAttribute("href") === "/gear#brille", doc.querySelector(".inventory-link")?.getAttribute("href"));
 check("empty hint hidden", doc.querySelector("[data-inventory-empty]").hasAttribute("hidden") === true);
 
@@ -130,6 +138,74 @@ await new Promise((r) => setTimeout(r, 20));
 check("no duplicate buttons after re-init", doc.querySelectorAll("[data-inventory-item-toggle]").length === 1);
 remounted[0].dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
 check("single toggle adds exactly one entry", JSON.parse(store.getItem("quartz:inventory")).length === 2, JSON.stringify(JSON.parse(store.getItem("quartz:inventory"))));
+
+// --- "Show all" modal -----------------------------------------------------
+const modal = doc.querySelector("[data-inventory-modal]");
+const showAll = doc.querySelector("[data-inventory-show-all]");
+check("panel has no clear button", doc.querySelector("[data-inventory-panel] [data-inventory-clear]") === null);
+check("'Show all' visible with entries", showAll.hasAttribute("hidden") === false);
+check("modal starts closed", modal.hasAttribute("hidden") === true);
+
+showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("modal opens", modal.hasAttribute("hidden") === false);
+check("scroll locked", doc.documentElement.classList.contains("inventory-modal-open") === true);
+check("modal lists all entries", doc.querySelectorAll("[data-inventory-modal-items] .inventory-entry").length === 2, `${doc.querySelectorAll("[data-inventory-modal-items] .inventory-entry").length}`);
+
+doc.querySelector("[data-inventory-modal-close]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("modal closes via close button", modal.hasAttribute("hidden") === true);
+check("scroll unlocked", doc.documentElement.classList.contains("inventory-modal-open") === false);
+
+showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+doc.querySelector("[data-inventory-modal-backdrop]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("modal closes via backdrop", modal.hasAttribute("hidden") === true);
+
+showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+doc.querySelector(".inventory-modal-content").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("modal stays open on inner click", modal.hasAttribute("hidden") === false);
+doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+check("modal closes via Escape", modal.hasAttribute("hidden") === true);
+
+// Removing from the modal updates both lists.
+showAll.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+doc.querySelector("[data-inventory-modal-items] .inventory-remove").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("remove in modal syncs panel list", doc.querySelectorAll("[data-inventory-items] .inventory-entry").length === 1);
+check("badge follows removal", doc.querySelector("[data-inventory-count]").textContent === "1");
+check("'Show all' hidden again when the last entry goes", JSON.parse(store.getItem("quartz:inventory")).length === 1);
+
+// Clearing from inside the modal empties everything and closes it.
+doc.querySelector("[data-inventory-modal] [data-inventory-clear]").dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+check("clear empties the inventory", JSON.parse(store.getItem("quartz:inventory")).length === 0);
+check("clear closes the modal", modal.hasAttribute("hidden") === true);
+check("'Show all' hidden when empty", doc.querySelector("[data-inventory-show-all]").hasAttribute("hidden") === true);
+
+// --- Entry URLs -----------------------------------------------------------
+// Quartz serves both `gear` and `notes/gear/` style URLs; links must reproduce
+// the exact path the item was stashed from, otherwise they 404.
+const urlDom = new JSDOM(page, { url: "https://example.com/notes/gear/", runScripts: "outside-only" });
+urlDom.window.eval(code);
+await new Promise((r) => setTimeout(r, 0));
+const uDoc = urlDom.window.document;
+uDoc.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new urlDom.window.MouseEvent("click", { bubbles: true }));
+check(
+  "nested/trailing-slash page URL is preserved",
+  uDoc.querySelector(".inventory-link").getAttribute("href") === "/notes/gear/#brille",
+  uDoc.querySelector(".inventory-link").getAttribute("href"),
+);
+check(
+  "entry page recorded verbatim",
+  JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page === "notes/gear/",
+  JSON.parse(urlDom.window.localStorage.getItem("quartz:inventory"))[0]?.page,
+);
+
+const idxDom = new JSDOM(page, { url: "https://example.com/", runScripts: "outside-only" });
+idxDom.window.eval(code);
+await new Promise((r) => setTimeout(r, 0));
+idxDom.window.document.querySelectorAll("[data-inventory-item-toggle]")[0].dispatchEvent(new idxDom.window.MouseEvent("click", { bubbles: true }));
+check(
+  "index page links to site root",
+  idxDom.window.document.querySelector(".inventory-link").getAttribute("href") === "/#brille",
+  idxDom.window.document.querySelector(".inventory-link").getAttribute("href"),
+);
 
 console.log(results.join("\n"));
 process.exit(results.some((r) => r.startsWith("FAIL")) ? 1 : 0);

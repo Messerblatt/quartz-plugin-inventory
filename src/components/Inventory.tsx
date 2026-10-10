@@ -48,11 +48,47 @@ export default ((opts?: InventoryOptions) => {
             <button
               type="button"
               class="inventory-clear"
-              data-inventory-clear
+              data-inventory-show-all
               hidden
             >
-              Clear
+              Show all
             </button>
+          </div>
+        </div>
+
+        <div class="inventory-modal" data-inventory-modal hidden>
+          <div class="inventory-modal-backdrop" data-inventory-modal-backdrop></div>
+
+          <div
+            class="inventory-modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${title} — all items`}
+          >
+            <div class="inventory-modal-header">
+              <span class="inventory-modal-title">{title}</span>
+              <button
+                type="button"
+                class="inventory-modal-close"
+                data-inventory-modal-close
+                aria-label="Close"
+              >
+                &#10005;
+              </button>
+            </div>
+
+            <ul class="inventory-list inventory-modal-list" data-inventory-modal-items></ul>
+
+            <div class="inventory-actions">
+              <button
+                type="button"
+                class="inventory-clear"
+                data-inventory-clear
+                hidden
+              >
+                Clear
+              </button>
+            </div>
           </div>
         </div>
       </aside>

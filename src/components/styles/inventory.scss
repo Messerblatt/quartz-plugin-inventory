@@ -142,6 +142,97 @@ $inv-accent: var(--linkColor, #0b6bcb);
   }
 }
 
+// --- "Show all" modal -----------------------------------------------------
+// Rendered inline (not <dialog>) so it inherits the theme's custom properties.
+
+$inv-surface-alt: color-mix(in srgb, var(--secondary, #6b6b6b) 8%, var(--light, #fff));
+
+html.inventory-modal-open,
+html.inventory-modal-open body {
+  overflow: hidden;
+}
+
+.inventory-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+
+  &[hidden] {
+    display: none;
+  }
+
+  .inventory-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--darkgray, #333) 45%, transparent);
+  }
+
+  .inventory-modal-content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    // Centered like Quartz's own modals, with a readable max width.
+    width: min(32rem, calc(100vw - 2rem));
+    max-height: min(70vh, 40rem);
+    margin: 10vh auto 0;
+    padding: 1rem 1.25rem 1.25rem;
+    border: 1px solid $inv-border;
+    border-radius: 0.75rem;
+    background: $inv-bg;
+    color: $inv-fg;
+    box-shadow: 0 1rem 3rem color-mix(in srgb, var(--darkgray, #333) 25%, transparent);
+    font-size: 0.9rem;
+    overflow-y: auto;
+
+    &:focus {
+      outline: none;
+    }
+  }
+
+  .inventory-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid $inv-border;
+  }
+
+  .inventory-modal-title {
+    flex: 1;
+    font-weight: 600;
+    font-size: 1rem;
+  }
+
+  .inventory-modal-close {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0.25rem;
+    border-radius: 0.35rem;
+    opacity: 0.6;
+
+    &:hover {
+      opacity: 1;
+      color: $inv-accent;
+    }
+  }
+
+  .inventory-modal-list {
+    // Entries get a little more breathing room than in the side panel.
+    gap: 0.25rem;
+  }
+
+  .inventory-entry {
+    padding: 0.45rem 0.5rem;
+    border-radius: 0.35rem;
+    background: $inv-surface-alt;
+  }
+}
+
 // --- Item blocks -----------------------------------------------------------
 // ```item fences rendered by rehype-pretty-code, tagged at runtime.
 

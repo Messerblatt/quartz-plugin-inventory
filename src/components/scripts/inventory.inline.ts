@@ -52,12 +52,21 @@ function write(key: string, value: string): void {
   }
 }
 
-/** Note slug of the current page, without leading/trailing slash. */
+/**
+ * Path of the current page, without the leading slash but with any trailing
+ * slash and subpath intact, so `/${page}` rebuilds the exact URL we came from.
+ * (Quartz emits both `foo` and `foo/` style URLs depending on config.)
+ */
 function currentPage(): string {
-  const parts = location.pathname.split("/").filter(Boolean);
-  const last = parts[parts.length - 1];
-  if (!last) return "index";
-  return decodeURIComponent(last);
+  const path = decodeURIComponent(location.pathname).replace(/^\/+/, "");
+  if (path === "" || path === "index" || path === "index/") return "index";
+  return path;
+}
+
+/** Link back to the page an item was stashed from. */
+function entryHref(entry: InventoryEntry): string {
+  const base = entry.page === "index" ? "/" : `/${entry.page.replace(/^\/+/, "")}`;
+  return `${base}#${entry.anchor}`;
 }
 
 /** Storage key of the (first) inventory panel on the page, or the default. */
@@ -206,9 +215,7 @@ function setBadge(root: HTMLElement, count: number) {
 }
 
 function render(root: HTMLElement, entries: InventoryEntry[]) {
-  const list = root.querySelector<HTMLElement>("[data-inventory-items]");
   const empty = root.querySelector<HTMLElement>("[data-inventory-empty]");
-  const clear = root.querySelector<HTMLElement>("[data-inventory-clear]");
   const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
   const toggle = root.querySelector<HTMLElement>("[data-inventory-toggle]");
 
@@ -219,9 +226,27 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
   }
 
   if (empty) empty.toggleAttribute("hidden", entries.length > 0);
-  if (clear) clear.toggleAttribute("hidden", entries.length === 0);
-  if (!list) return;
 
+  // "Show all" and the in-modal "Clear" are only useful with entries.
+  for (const action of Array.from(
+    root.querySelectorAll<HTMLElement>(
+      "[data-inventory-show-all], [data-inventory-clear]",
+    ),
+  )) {
+    action.toggleAttribute("hidden", entries.length === 0);
+  }
+
+  // Both the panel list and the modal list show the same entries.
+  for (const list of Array.from(
+    root.querySelectorAll<HTMLElement>(
+      "[data-inventory-items], [data-inventory-modal-items]",
+    ),
+  )) {
+    fillList(list, entries);
+  }
+}
+
+function fillList(list: HTMLElement, entries: InventoryEntry[]) {
   list.textContent = "";
 
   for (const entry of sortInventory(entries)) {
@@ -231,7 +256,7 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
 
     const link = document.createElement("a");
     link.className = "inventory-link";
-    link.href = entry.page === "index" ? `/#${entry.anchor}` : `/${entry.page}#${entry.anchor}`;
+    link.href = entryHref(entry);
     link.textContent = entry.title;
 
     const meta = document.createElement("span");
@@ -292,6 +317,14 @@ function mountItems() {
   refreshItemButtons(parseInventory(read(storageKey)));
 }
 
+/** Hide the "Show all" modal and release the scroll lock. */
+function closeModal(root: HTMLElement) {
+  root.querySelector<HTMLElement>("[data-inventory-modal]")?.setAttribute("hidden", "");
+  if (!document.querySelector("[data-inventory-modal]:not([hidden])")) {
+    document.documentElement.classList.remove("inventory-modal-open");
+  }
+}
+
 function initRoot(root: HTMLElement) {
   // `init` runs again after client-side navigation; never double-bind.
   if (root.hasAttribute("data-inventory-ready")) return;
@@ -321,7 +354,39 @@ function initRoot(root: HTMLElement) {
       const next: InventoryEntry[] = [];
       write(storageKey, serializeInventory(next));
       syncAll(next);
+      closeModal(root);
     });
+
+  // --- "Show all" modal ---------------------------------------------------
+  const modal = root.querySelector<HTMLElement>("[data-inventory-modal]");
+
+  const openModal = () => {
+    if (!modal) return;
+    render(root, parseInventory(read(storageKey)));
+    modal.removeAttribute("hidden");
+    document.documentElement.classList.add("inventory-modal-open");
+    (modal.querySelector<HTMLElement>("[data-inventory-modal-close]") ??
+      modal)?.focus?.();
+  };
+
+  const closeDialog = () => closeModal(root);
+
+  root
+    .querySelector<HTMLElement>("[data-inventory-show-all]")
+    ?.addEventListener("click", openModal);
+  modal
+    ?.querySelector<HTMLElement>("[data-inventory-modal-backdrop]")
+    ?.addEventListener("click", closeDialog);
+  modal
+    ?.querySelector<HTMLElement>("[data-inventory-modal-close]")
+    ?.addEventListener("click", closeDialog);
+  // Clicking the backdrop but not the dialog must not close.
+  modal?.addEventListener("click", (event) => {
+    if (event.target === modal) closeDialog();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal && !modal.hasAttribute("hidden")) closeDialog();
+  });
 
   root.addEventListener("click", (event) => {
     const slug = (event.target as HTMLElement | null)?.getAttribute?.("data-inventory-remove");

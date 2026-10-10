@@ -7,10 +7,15 @@ notes into a persistent, `localStorage`-backed backpack.
 ## Features
 
 - Per-note **"+ Stash" / "✓ Stashed"** button injected into the article body.
+  Stashing blanks the item's text, so the source page stays clean.
 - A collapsible **Inventory** panel (right sidebar by default) with a count badge.
+- A **"Show all"** button that opens a modal with the full inventory — themed via
+  Quartz CSS variables, closes on backdrop click, `Esc` or the × button.
 - Entries persist across pages, reloads and builds — they live in the reader's
   browser only, never on the server.
-- Remove single entries or clear the whole inventory.
+- Remove single entries, or clear the whole inventory from the modal.
+- Item links reproduce the exact page URL they were stashed from, so they keep
+  working with nested paths (`/notes/gear/`) and trailing slashes.
 - Pure CSS, respects `prefers-color-scheme` via Quartz CSS variables.
 
 ## Install
@@ -51,14 +56,17 @@ Inventory({
 ```json
 [
   {
-    "slug": "notes/digital-garden",
-    "title": "Digital Garden",
-    "addedAt": "2026-10-09T19:10:20.029Z",
-    "tags": ["garden"],
-    "excerpt": "A public notebook that grows in public…"
+    "slug": "notes/gear/#diesel",
+    "title": "Diesel",
+    "page": "notes/gear/",
+    "anchor": "diesel",
+    "addedAt": "2026-10-09T19:10:20.029Z"
   }
 ]
 ```
+
+`page` is the page path as the browser sees it (no leading slash), so
+`/${page}#${anchor}` rebuilds a working link.
 
 Pure helpers for this format live in `src/lib/inventory.ts` and are exported:
 
@@ -87,6 +95,7 @@ npm install
 npm run dev        # watch build
 npm run typecheck
 npm run build
+npm run check      # typecheck + build + browser runtime tests
 ```
 
 ### Project layout
