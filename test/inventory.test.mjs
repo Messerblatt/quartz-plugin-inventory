@@ -31,6 +31,10 @@ const html = `<!doctype html><html><body>
       <ul data-inventory-items></ul>
       <button data-inventory-show-all>Show all</button>
     </div>
+    <div class="inventory-modal" data-inventory-modal hidden>
+      <div class="inventory-modal-content">
+        <ul class="inventory-list" data-inventory-modal-items></ul>
+    </div>
   </aside>
 </body></html>`;
 
@@ -119,6 +123,28 @@ check(
   JSON.stringify(db.map((e) => [e.name, e.anchor, e.slug])),
 );
 check("each record keeps quantity, location and timestamp", db.every((e) => e.quantity === 1 && e.location === "" && typeof e.timestamp === "string"), JSON.stringify(db));
+const panelRow = () => doc.querySelector("[data-inventory-items] .inventory-entry");
+const modalRow = () => doc.querySelector("[data-inventory-modal-items] .inventory-entry");
+check(
+  "the sidebar row hides quantity and date",
+  panelRow().querySelector(".inventory-quantity").hidden === true &&
+    panelRow().querySelector(".inventory-meta").hidden === true,
+);
+check(
+  "the modal row still shows quantity and date",
+  modalRow().querySelector(".inventory-quantity").hidden === false &&
+    modalRow().querySelector(".inventory-meta").hidden === false,
+);
+check(
+  "the sidebar row keeps what it dropped in its tooltip",
+  /×\d/.test(panelRow().getAttribute("title")),
+  panelRow().getAttribute("title"),
+);
+check(
+  "the sidebar row is tagged compact, the modal row is not",
+  doc.querySelector("[data-inventory-items]").classList.contains("inventory-list--compact") &&
+    !doc.querySelector("[data-inventory-modal-items]").classList.contains("inventory-list--compact"),
+);
 check(
   "each stored record lists the block it came from in `sources`",
   db.every((e) => Array.isArray(e.sources) && e.sources.includes(e.slug)),

@@ -56,8 +56,21 @@ $inv-accent: var(--linkColor, #0b6bcb);
     text-align: center;
   }
 
+  // The panel is the one part of the component with no border of its own, so it
+  // read as loose text floating under the toggle. A light frame groups the
+  // entries; it echoes the toggle's radius so the two read as one object.
   .inventory-panel {
-    padding: 0.25rem 0.15rem;
+    padding: 0.4rem 0.5rem 0.5rem;
+    border: 1px solid $inv-border;
+    border-top-left-radius: 0.35rem;
+    border-top-right-radius: 0.35rem;
+    border-bottom-left-radius: 0.5rem;
+    border-bottom-right-radius: 0.5rem;
+    background: color-mix(in srgb, var(--secondary, #6b6b6b) 4%, transparent);
+
+    // Sit flush under the toggle: the toggle is the panel's header, so the
+    // touching edges should not both draw a line.
+    margin-top: -1px;
   }
 
   .inventory-empty {
@@ -142,6 +155,12 @@ $inv-accent: var(--linkColor, #0b6bcb);
       opacity: 1;
       color: #c0392b;
     }
+  }
+
+  // In the narrow sidebar the quantity and date are hidden (they wrapped and
+  // broke the column), so rows stay one line: name, location, remove.
+  .inventory-list--compact .inventory-entry {
+    gap: 0.4rem;
   }
 
   .inventory-actions {

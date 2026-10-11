@@ -20,6 +20,7 @@
  */
 
 import PLING_SRC from "../assets/pling.mp3";
+import UNPLINK_SRC from "../assets/unplink.mp3";
 import {
   DEFAULT_CATEGORY,
   DEFAULT_STORAGE_KEY,
@@ -382,13 +383,16 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
     action.toggleAttribute("hidden", entries.length === 0);
   }
 
-  // Both the panel list and the modal list show the same entries.
+  // The panel is a narrow sidebar, so it gets the compact list; the "Show all"
+  // modal has the width for the full set of columns.
+  for (const list of Array.from(root.querySelectorAll<HTMLElement>("[data-inventory-items]"))) {
+    fillList(list, entries, { compact: true });
+  }
+
   for (const list of Array.from(
-    root.querySelectorAll<HTMLElement>(
-      "[data-inventory-items], [data-inventory-modal-items]",
-    ),
+    root.querySelectorAll<HTMLElement>("[data-inventory-modal-items]"),
   )) {
-    fillList(list, entries);
+    fillList(list, entries, { compact: false });
   }
 }
 
@@ -396,9 +400,18 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
  * One entry per line: name, category, quantity, location, date and the remove
  * button. All metadata is read-only - it comes from the fence and is never
  * edited in the UI.
+ *
+ * `compact` drops the quantity and date. In the narrow sidebar they wrapped
+ * onto extra lines and pushed the list out of shape; the modal keeps them, and
+ * the removed values stay available there and on the entry's tooltips.
  */
-function fillList(list: HTMLElement, entries: InventoryEntry[]) {
+function fillList(
+  list: HTMLElement,
+  entries: InventoryEntry[],
+  { compact = false }: { compact?: boolean } = {},
+) {
   list.textContent = "";
+  list.classList.toggle("inventory-list--compact", compact);
 
   for (const entry of sortInventory(entries)) {
     const li = document.createElement("li");
@@ -425,6 +438,7 @@ function fillList(list: HTMLElement, entries: InventoryEntry[]) {
     quantity.className = "inventory-quantity";
     quantity.textContent = `\u00d7${entry.quantity}`;
     quantity.title = `Quantity: ${entry.quantity}`;
+    quantity.hidden = compact;
 
     const location = document.createElement("span");
     location.className = "inventory-location";
@@ -435,6 +449,7 @@ function fillList(list: HTMLElement, entries: InventoryEntry[]) {
     const meta = document.createElement("span");
     meta.className = "inventory-meta";
     meta.textContent = new Date(entry.timestamp).toLocaleDateString();
+    meta.hidden = compact;
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -444,6 +459,13 @@ function fillList(list: HTMLElement, entries: InventoryEntry[]) {
     remove.textContent = "\u00d7";
 
     li.append(name, category, quantity, location, meta, remove);
+    // Without the quantity and date to break them up, a row needs to say what
+    // it holds on its own.
+    if (compact) {
+      li.title = [entry.location, `\u00d7${entry.quantity}`, new Date(entry.timestamp).toLocaleDateString()]
+        .filter(Boolean)
+        .join(" \u00b7 ");
+    }
     list.append(li);
   }
 }
@@ -524,6 +546,7 @@ async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
       });
     }
     syncAll(await store.all());
+    celebrateRemoval();
     return;
   }
 
@@ -553,34 +576,53 @@ async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
 const pling = typeof Audio === "function" ? new Audio(PLING_SRC) : null;
 if (pling) pling.volume = 0.4;
 
-/** Blink the panel so stashing is visible somewhere even off to the side. */
+/** The softer, descending counterpart, played when something leaves the bag. */
+const unplink = typeof Audio === "function" ? new Audio(UNPLINK_SRC) : null;
+if (unplink) unplink.volume = 0.35;
+
+/**
+ * Play a sound without letting a blocked or missing one interrupt anything.
+ * Browsers return a promise that rejects when autoplay is disallowed; some
+ * environments return nothing at all, so normalise before catching.
+ */
+function play(sound: HTMLAudioElement | null) {
+  if (!sound) return;
+  sound.currentTime = 0;
+  void Promise.resolve(sound.play()).catch(() => {
+    /* autoplay blocked - the inventory itself is already correct */
+  });
+}
+
+let blinkTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Blink the panel so a change is visible somewhere even off to the side. */
 function blink() {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
     root.classList.remove("is-stashing");
     // Force a reflow so re-adding the class restarts the animation even when
-    // two items are stashed in quick succession.
+    // two items change in quick succession.
     void root.offsetWidth;
     root.classList.add("is-stashing");
   }
-}
 
-let blinkTimer: ReturnType<typeof setTimeout> | undefined;
-function celebrate() {
-  blink();
   clearTimeout(blinkTimer);
   blinkTimer = setTimeout(() => {
     for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
       root.classList.remove("is-stashing");
     }
   }, BLINK_MS);
+}
 
-  if (!pling) return;
-  pling.currentTime = 0;
-  // Browsers return a promise that rejects when autoplay is blocked; some
-  // environments return nothing at all, so normalise before catching.
-  void Promise.resolve(pling.play()).catch(() => {
-    /* autoplay blocked - the stash itself already succeeded */
-  });
+/** Something went into the bag. */
+function celebrate() {
+  blink();
+  play(pling);
+}
+
+/** Something came back out. */
+function celebrateRemoval() {
+  blink();
+  play(unplink);
 }
 
 // --- Component wiring ------------------------------------------------------
@@ -678,7 +720,7 @@ async function initRoot(root: HTMLElement) {
     const slug = target?.getAttribute?.("data-inventory-remove");
     if (!slug) return;
     event.preventDefault();
-    void update((s) => s.remove(slug));
+    void update((s) => s.remove(slug)).then(celebrateRemoval);
   });
 
   if (read(openKey) === "1") setOpen(true);
