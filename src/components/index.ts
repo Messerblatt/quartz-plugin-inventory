@@ -1,2 +1,2 @@
-export { default as Inventory } from "./Inventory";
-export type { InventoryOptions } from "./Inventory";
+export { default as Rucksack } from "./Rucksack";
+export type { RucksackOptions } from "../lib/config";

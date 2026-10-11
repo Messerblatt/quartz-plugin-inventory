@@ -1,17 +1,18 @@
 /**
- * Browser runtime for the Inventory component.
+ * Browser runtime for the Rucksack component.
  *
  * Runs inside a <script> tag after DOMContentLoaded (bundled to a plain JS
  * string by the inline-script-loader), so it is side-effect driven.
  *
- * Items are marked in Obsidian with an ```item fence (```event and ```secret
- * work too), which rehype-pretty-code renders as:
+ * Anything in a fenced block is stowable. rehype-pretty-code renders a fence as:
  *   <figure data-rehype-pretty-code-figure>
  *     <pre data-language="item" ...><code ...>Item name</code></pre>
  *   </figure>
- * The first non-empty line is the item name; optional following lines may carry
- * a quantity (`x3`) and a location (`Location: Cellar`). Anchors are derived
- * from the slugified name, so entries survive renames of unrelated pages.
+ * so "everything in a fence" is simply every rendered <pre>; `languages` narrows
+ * that to specific fence languages when a site wants it. The first non-empty
+ * line is the entry's name; optional following lines may carry a quantity
+ * (`x3`) and a location (`Location: Cellar`). Anchors are derived from the
+ * slugified name, so entries survive renames of unrelated pages.
  *
  * Persistence: IndexedDB (via Dexie, see ../../lib/db.ts). Each entry stores
  * { slug, name, category, quantity, location, timestamp, page, anchor }.
@@ -22,34 +23,62 @@
 import PLING_SRC from "../assets/pling.mp3";
 import UNPLINK_SRC from "../assets/unplink.mp3";
 import {
-  DEFAULT_CATEGORY,
-  DEFAULT_STORAGE_KEY,
-  ITEM_SELECTOR,
-  addStashedItem,
+  anchorForName,
+  blockSelector,
+  detailsFromBlock,
+  displayCategory,
   entrySources,
   findMergeTarget,
   findSameBlock,
   isBlockCarried,
-  isItemCategory,
-  itemDetailsFromBlock,
-  itemNameFromBlock,
-  slugify,
-  sortInventory,
-  truncateTitle,
-  type InventoryEntry,
-  type ItemCategory,
-} from "../../lib/inventory.ts";
+  isLanguageStashable,
+  nameFromBlock,
+  normalizeCategory,
+  addStashedEntry,
+  sortEntries,
+  truncateName,
+  type RucksackEntry,
+} from "../../lib/rucksack.ts";
 import {
-  openInventoryStore,
+  configFromAttributes,
+  resolveConfig,
+  type ResolvedRucksackConfig,
+  type RucksackOptions,
+} from "../../lib/config.ts";
+import {
+  openRucksackStore,
   requestPersistentStorage,
-  type InventoryStore,
+  type RucksackStore,
 } from "../../lib/db.ts";
 
 const OPEN_KEY_SUFFIX = ":open";
-const ROOT_SELECTOR = "[data-inventory]";
-const ITEM_NAME_ATTR = "data-inventory-item-title";
-/** Keep in sync with the `.is-stashing` animation in inventory.scss. */
+const ROOT_SELECTOR = "[data-rucksack]";
+const BLOCK_ATTR = "data-rucksack-block";
+const NAME_ATTR = "data-rucksack-name";
+/** Keep in sync with the `.is-stashing` animation in rucksack.scss. */
 const BLINK_MS = 620;
+
+/** Attribute the toggle button is mounted with, and the block it points at. */
+const TOGGLE_ATTR = "data-rucksack-toggle-block";
+
+// --- Configuration ---------------------------------------------------------
+
+/**
+ * The config this page runs with: the one the component inlined, refined by the
+ * panel's `data-*` attributes, which win. Read once and cached - it is fixed
+ * for the life of the page.
+ */
+let cachedConfig: ResolvedRucksackConfig | undefined;
+
+function config(): ResolvedRucksackConfig {
+  if (cachedConfig) return cachedConfig;
+  const inlined = (window as unknown as Record<string, unknown>)["__RUCKSACK_CONFIG__"];
+  const base = typeof inlined === "object" && inlined !== null ? inlined : undefined;
+  const root = document.querySelector(ROOT_SELECTOR);
+  const attrs = root ? configFromAttributes((name) => root.getAttribute(name)) : {};
+  cachedConfig = resolveConfig({ ...(base as Partial<RucksackOptions>), ...attrs });
+  return cachedConfig;
+}
 
 function read(key: string): string | null {
   try {
@@ -77,32 +106,26 @@ function currentPage(): string {
   return path;
 }
 
-/** Fence language of a block, i.e. the category it belongs to. */
-function blockCategory(el: HTMLElement): ItemCategory {
-  const language = el.getAttribute("data-language");
-  return isItemCategory(language) ? language : DEFAULT_CATEGORY;
-}
-
-/** Storage key of the (first) inventory panel on the page, or the default. */
+/** Storage key of the (first) rucksack panel on the page, or the config's. */
 function storageKeyFor(doc: Document = document): string {
   return (
-    doc.querySelector<HTMLElement>(ROOT_SELECTOR)?.getAttribute("data-inventory-key") ??
-    DEFAULT_STORAGE_KEY
+    doc.querySelector<HTMLElement>(ROOT_SELECTOR)?.getAttribute("data-rucksack-key") ??
+    config().storageKey
   );
 }
 
 // --- Store -----------------------------------------------------------------
 
 /** One store per storage key, opened lazily and cached for the page. */
-const stores = new Map<string, Promise<InventoryStore>>();
+const stores = new Map<string, Promise<RucksackStore>>();
 
-function storeFor(storageKey: string): Promise<InventoryStore> {
+function storeFor(storageKey: string): Promise<RucksackStore> {
   const existing = stores.get(storageKey);
   if (existing) return existing;
-  const created = openInventoryStore(storageKey).catch((error: unknown) => {
+  const created = openRucksackStore(storageKey).catch((error: unknown) => {
     // Keep the panel usable (empty) if IndexedDB is unavailable, e.g. private
     // mode with storage disabled.
-    console.warn("[inventory] IndexedDB unavailable, inventory is disabled", error);
+    console.warn("[rucksack] IndexedDB unavailable, rucksack is disabled", error);
     stores.delete(storageKey);
     throw error;
   });
@@ -110,41 +133,66 @@ function storeFor(storageKey: string): Promise<InventoryStore> {
   return created;
 }
 
-// --- Item discovery --------------------------------------------------------
+// --- Block discovery -------------------------------------------------------
 
 /**
- * Item blocks on this page. Both the <pre> and the nested <code> carry
- * `data-language="item"`, so keep only the outermost match of each block and
- * never descend into an already-matched element.
+ * Contexts a `<pre>` can sit in that are not a page's prose - an editor's code
+ * block, a form, a live preview. Stashing those would inject buttons into
+ * something the reader is typing into.
  */
-function itemBlocks(): HTMLElement[] {
+const EDITOR_SELECTOR = "[contenteditable], form, [role='textbox'], .cm-editor, .quill";
+
+/**
+ * Stashable blocks on this page: every rendered fence, or just the fence
+ * languages the config allows.
+ *
+ * When stashing *all* fences, both the <pre> and the nested <code> can match
+ * `[data-language]`, so keep only the outermost match of each block and never
+ * descend into an already-matched element. With `pre` the outermost element is
+ * the only candidate anyway.
+ */
+function stowableBlocks(): HTMLElement[] {
+  const cfg = config();
+  const selector = blockSelector(cfg.languages, cfg.excludeLanguages);
   const blocks: HTMLElement[] = [];
 
-  for (const el of Array.from(document.querySelectorAll<HTMLElement>(ITEM_SELECTOR))) {
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
     // Skip anything nested inside an already collected block.
-    if (el.parentElement?.closest(ITEM_SELECTOR)) continue;
+    if (el.parentElement?.closest(selector)) continue;
+    if (el.closest(EDITOR_SELECTOR)) continue;
+    if (!isLanguageStashable(blockLanguage(el), cfg.languages, cfg.excludeLanguages)) continue;
     blocks.push(el);
   }
 
   return blocks;
 }
 
+/** Fence language of a block, i.e. the category it belongs to. */
+function blockLanguage(el: HTMLElement): string {
+  return normalizeCategory(
+    el.getAttribute("data-language") ??
+      el.querySelector<HTMLElement>("[data-language]")?.getAttribute("data-language"),
+  );
+}
+
 /**
  * Stashed blocks, keyed by anchor, with the comment node left behind in their
  * place.
  *
- * A stashed item is removed from the document entirely - fence, figure and
- * "+ Stash" button - so the page reads like the item was picked up. The element
- * is parked here rather than discarded, and the placeholder remembers where it
- * belongs, so unstashing it later (from the panel's remove button) puts it back
- * exactly where it was instead of leaving a hole.
+ * With `removeFromDom` on (the default), a stashed block is removed from the
+ * document entirely - fence, figure and "+ Stash" button - so the page reads
+ * like the thing was picked up. The element is parked here rather than
+ * discarded, and the placeholder remembers where it belongs, so unstashing it
+ * later (from the panel's remove button) puts it back exactly where it was
+ * instead of leaving a hole. With `removeFromDom` off nothing is ever parked;
+ * the block stays in place and is only marked.
  */
 const parkedBlocks = new Map<string, { figure: HTMLElement; placeholder: Comment }>();
 
 /** Take a stashed block out of the page. Idempotent. */
 function parkBlock(anchor: string, figure: HTMLElement) {
   if (parkedBlocks.has(anchor)) return;
-  const placeholder = document.createComment(`inventory:stashed:${anchor}`);
+  const placeholder = document.createComment(`rucksack:stashed:${anchor}`);
   figure.replaceWith(placeholder);
   parkedBlocks.set(anchor, { figure, placeholder });
 }
@@ -159,12 +207,18 @@ function unparkBlock(anchor: string) {
   if (parked.placeholder.parentNode) parked.placeholder.replaceWith(parked.figure);
 }
 
-interface DiscoveredItem {
+/** The <figure> wrapping a block - what actually leaves the page. */
+function figureOf(el: HTMLElement): HTMLElement {
+  return el.closest("figure") ?? el;
+}
+
+interface DiscoveredBlock {
   el: HTMLElement;
+  figure: HTMLElement;
   name: string;
   slug: string;
   anchor: string;
-  category: ItemCategory;
+  category: string;
   quantity: number;
   location: string;
 }
@@ -172,9 +226,9 @@ interface DiscoveredItem {
 /**
  * Tag blank rendered lines so CSS can drop them. rehype-pretty-code wraps every
  * line in `span[data-line]`, and the fence's leading/trailing newline shows up
- * as an empty line around the item name. Without this, a one-line fence whose
- * only span *is* the name would be hidden by a `:last-child` rule and render
- * as an empty block.
+ * as an empty line around the name. Without this, a one-line fence whose only
+ * span *is* the name would be hidden by a `:last-child` rule and render as an
+ * empty block.
  */
 function markBlankLines(el: HTMLElement) {
   for (const line of Array.from(el.querySelectorAll<HTMLElement>("span[data-line]"))) {
@@ -183,25 +237,32 @@ function markBlankLines(el: HTMLElement) {
 }
 
 /**
- * The item name, read from the rendered lines only. rehype-pretty-code injects
+ * The entry name, read from the rendered lines only. rehype-pretty-code injects
  * a "copy source" clipboard button into the block, so the block's raw
- * textContent would otherwise start with the button's label instead of the
- * item name.
+ * textContent would otherwise start with the button's label instead of the name.
  */
-function itemName(el: HTMLElement): string {
+function blockName(el: HTMLElement): string {
+  const cfg = config();
+  // A fence with no useful first line (a snippet, a command) can name itself
+  // through an attribute instead.
+  if (cfg.nameAttribute) {
+    const named = figureOf(el).getAttribute(cfg.nameAttribute);
+    if (named && named.trim().length > 0) return named.trim();
+  }
+
   const lines = el.querySelectorAll<HTMLElement>("span[data-line]");
   if (lines.length > 0) {
     for (const line of Array.from(lines)) {
-      const name = itemNameFromBlock(line.textContent);
+      const name = nameFromBlock(line.textContent);
       if (name) return name;
     }
     return "";
   }
-  return itemNameFromBlock(el.textContent);
+  return nameFromBlock(el.textContent);
 }
 
 /** Raw fence text (all rendered lines), used to read quantity/location hints. */
-function itemBlockText(el: HTMLElement): string {
+function blockText(el: HTMLElement): string {
   const lines = Array.from(el.querySelectorAll<HTMLElement>("span[data-line]"));
   const source = lines.length > 0 ? lines : [el];
   return source
@@ -210,15 +271,15 @@ function itemBlockText(el: HTMLElement): string {
     .trim();
 }
 
-function discoverItems(): DiscoveredItem[] {
+function discoverBlocks(): DiscoveredBlock[] {
   const page = currentPage();
-  const items: DiscoveredItem[] = [];
-  const used = new Map<string, number>();
+  const cfg = config();
+  const blocks: DiscoveredBlock[] = [];
 
   // Parked (stashed) blocks are gone from the document but still hold their
   // anchors. Keep their slots reserved, or the anchors of the blocks after them
   // would shift down and a "kompass-1" would quietly become a "kompass" - a
-  // different item in the store. Live blocks take the lowest free slot.
+  // different entry in the store. Live blocks take the lowest free slot.
   const taken = new Map<string, Set<number>>();
   for (const anchor of parkedBlocks.keys()) {
     const cut = anchor.lastIndexOf("-");
@@ -241,130 +302,138 @@ function discoverItems(): DiscoveredItem[] {
     return slot;
   };
 
-  for (const el of itemBlocks()) {
+  for (const el of stowableBlocks()) {
     markBlankLines(el);
-    // ```item is the default; ```event / ```secret and friends get their own.
-    const category = blockCategory(el);
+    const category = blockLanguage(el);
 
-    // Stashed blocks are parked out of the document, so everything below is
+    // Parked blocks are parked out of the document, so everything below is
     // reading a live block with its text intact.
-    const name = itemName(el) || el.getAttribute(ITEM_NAME_ATTR) || "";
+    const name = blockName(el) || el.getAttribute(NAME_ATTR) || "";
     if (!name) continue;
 
-    const details = itemDetailsFromBlock(itemBlockText(el));
+    const details = cfg.parseDetails ? detailsFromBlock(blockText(el)) : null;
 
-    const base = slugify(name) || "item";
-    // De-duplicate anchors when a page repeats the same item name.
-    const slot = nextFreeSlot(base);
-    const anchor = slot === 0 ? base : `${base}-${slot}`;
+    // De-duplicate anchors when a page repeats the same name.
+    const slot = nextFreeSlot(anchorForName(name));
+    const anchor = anchorForName(name, slot);
     const slug = `${page}#${anchor}`;
 
-    el.setAttribute("data-inventory-item", anchor);
-    el.setAttribute(ITEM_NAME_ATTR, name);
-    el.setAttribute("data-inventory-category", category);
-    el.classList.add("inventory-item-block");
-    el.classList.add(`inventory-item-block--${category}`);
+    el.setAttribute(BLOCK_ATTR, anchor);
+    el.setAttribute(NAME_ATTR, name);
+    el.setAttribute("data-rucksack-category", category);
+    el.classList.add("rucksack-block");
+    if (category) el.classList.add(`rucksack-block--${category}`);
 
-    items.push({
+    blocks.push({
       el,
+      figure: figureOf(el),
       name,
       slug,
       anchor,
       category,
-      quantity: details.quantity,
-      location: details.location,
+      quantity: details?.quantity ?? 1,
+      location: details?.location ?? "",
     });
   }
 
-  return items;
+  return blocks;
 }
 
 /** The entry a block maps to when stashed. Existing entries keep their
  *  quantity/location/timestamp so re-stashing never resets them. */
-function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEntry {
+function entryFor(
+  block: DiscoveredBlock,
+  existing?: RucksackEntry,
+): RucksackEntry {
   return {
-    slug: item.slug,
-    name: item.name,
-    category: item.category,
-    quantity: item.quantity,
-    location: item.location,
+    slug: block.slug,
+    name: block.name,
+    category: block.category,
+    quantity: block.quantity,
+    location: block.location,
     timestamp: existing?.timestamp ?? new Date().toISOString(),
     page: currentPage(),
-    anchor: item.anchor,
-    sources: existing ? [...new Set([...entrySources(existing), item.slug])] : [item.slug],
+    anchor: block.anchor,
+    sources: existing
+      ? [...new Set([...entrySources(existing), block.slug])]
+      : [block.slug],
   };
 }
 
 // --- Rendering -------------------------------------------------------------
 
 /**
- * Keep every item button (and its block) on the page in sync with the carried
- * items.
+ * Keep every block's toggle button (and the block itself) in sync with the
+ * stashed entries.
  *
  * State is decided by the block's anchor, not by its name: two `kompass` blocks
- * on one page are two items, so stashing one leaves the other as "+ Stash".
+ * on one page are two entries, so stashing one leaves the other as "+ Stash".
  */
-function refreshItemButtons(entries: InventoryEntry[]) {
+function refreshBlockButtons(entries: RucksackEntry[]) {
+  const cfg = config();
+
   for (const button of Array.from(
-    document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
+    document.querySelectorAll<HTMLElement>(`[${TOGGLE_ATTR}]`),
   )) {
     const stashed = isCarried(entries, button);
-    button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
+    button.textContent = stashed ? cfg.stashedLabel : cfg.stashLabel;
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
   }
 
-  // Stashed blocks leave the page entirely - fence, figure and button - so the
-  // reader sees a clean page and can no longer re-stash the same block.
-  for (const el of Array.from(
-    document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
-  )) {
-    const anchor = el.getAttribute("data-inventory-item");
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>(`[${BLOCK_ATTR}]`))) {
+    const anchor = el.getAttribute(BLOCK_ATTR);
     if (!anchor) continue;
-    if (isCarried(entries, el)) parkBlock(anchor, figureOf(el));
-    else unparkBlock(anchor);
+    const carried = isCarried(entries, el);
+
+    if (cfg.removeFromDom) {
+      // Stashed blocks leave the page entirely - fence, figure and button - so
+      // the reader sees a clean page and can no longer re-stash the same block.
+      if (carried) parkBlock(anchor, figureOf(el));
+      else unparkBlock(anchor);
+    } else {
+      // Keep the block where it is; marking it says the same thing without
+      // leaving a hole in prose that referred to it.
+      el.classList.toggle("is-stashed", carried);
+      figureOf(el).classList.toggle("is-stashed", carried);
+      unparkBlock(anchor);
+    }
   }
 
   // Parked blocks are out of the document, so their buttons cannot be found by
   // the loop above; clear the stale one before the figure goes back in.
   for (const [anchor, parked] of parkedBlocks) {
-    const button = parked.figure.querySelector<HTMLElement>("[data-inventory-item-toggle]");
+    const button = parked.figure.querySelector<HTMLElement>(`[${TOGGLE_ATTR}]`);
     if (!button) continue;
     const stashed = isCarried(entries, button);
-    button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
+    button.textContent = stashed ? config().stashedLabel : config().stashLabel;
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
     if (!stashed) unparkBlock(anchor);
   }
 }
 
-/** The <figure> wrapping an item block - what actually leaves the page. */
-function figureOf(el: HTMLElement): HTMLElement {
-  return el.closest("figure") ?? el;
-}
-
 /**
  * Is this element's block the one in the bag? The block carries its page-local
- * anchor in `data-inventory-item`; the button carries the full `page#anchor` slug
- * in `data-inventory-item-toggle`. Both reduce to the same anchor.
+ * anchor in `data-rucksack-block`; the button carries the full `page#anchor` slug
+ * in `data-rucksack-toggle-block`. Both reduce to the same anchor.
  */
-function isCarried(entries: InventoryEntry[], el: HTMLElement): boolean {
+function isCarried(entries: RucksackEntry[], el: HTMLElement): boolean {
   const anchor =
-    el.getAttribute("data-inventory-item") ??
-    el.getAttribute("data-inventory-item-toggle")?.split("#").pop();
+    el.getAttribute(BLOCK_ATTR) ?? el.getAttribute(TOGGLE_ATTR)?.split("#").pop();
   if (!anchor) return false;
   return isBlockCarried(entries, `${currentPage()}#${anchor}`);
 }
 
 function setBadge(root: HTMLElement, count: number) {
-  const badge = root.querySelector<HTMLElement>("[data-inventory-count]");
+  const badge = root.querySelector<HTMLElement>("[data-rucksack-count]");
   if (badge) badge.textContent = String(count);
 }
 
-function render(root: HTMLElement, entries: InventoryEntry[]) {
-  const empty = root.querySelector<HTMLElement>("[data-inventory-empty]");
-  const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
-  const toggle = root.querySelector<HTMLElement>("[data-inventory-toggle]");
+function render(root: HTMLElement, entries: RucksackEntry[]) {
+  const empty = root.querySelector<HTMLElement>("[data-rucksack-empty]");
+  const panel = root.querySelector<HTMLElement>("[data-rucksack-panel]");
+  const toggle = root.querySelector<HTMLElement>("[data-rucksack-toggle]");
 
   setBadge(root, entries.length);
 
@@ -377,7 +446,7 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
   // "Show all" and the in-modal "Clear" are only useful with entries.
   for (const action of Array.from(
     root.querySelectorAll<HTMLElement>(
-      "[data-inventory-show-all], [data-inventory-clear]",
+      "[data-rucksack-show-all], [data-rucksack-clear]",
     ),
   )) {
     action.toggleAttribute("hidden", entries.length === 0);
@@ -385,12 +454,12 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
 
   // The panel is a narrow sidebar, so it gets the compact list; the "Show all"
   // modal has the width for the full set of columns.
-  for (const list of Array.from(root.querySelectorAll<HTMLElement>("[data-inventory-items]"))) {
+  for (const list of Array.from(root.querySelectorAll<HTMLElement>("[data-rucksack-entries]"))) {
     fillList(list, entries, { compact: true });
   }
 
   for (const list of Array.from(
-    root.querySelectorAll<HTMLElement>("[data-inventory-modal-items]"),
+    root.querySelectorAll<HTMLElement>("[data-rucksack-modal-entries]"),
   )) {
     fillList(list, entries, { compact: false });
   }
@@ -407,55 +476,58 @@ function render(root: HTMLElement, entries: InventoryEntry[]) {
  */
 function fillList(
   list: HTMLElement,
-  entries: InventoryEntry[],
+  entries: RucksackEntry[],
   { compact = false }: { compact?: boolean } = {},
 ) {
+  const cfg = config();
   list.textContent = "";
-  list.classList.toggle("inventory-list--compact", compact);
+  list.classList.toggle("rucksack-list--compact", compact);
 
-  for (const entry of sortInventory(entries)) {
+  for (const entry of sortEntries(entries)) {
     const li = document.createElement("li");
-    li.className = "inventory-entry";
-    li.setAttribute("data-inventory-slug", entry.slug);
-    li.setAttribute("data-inventory-category", entry.category);
+    li.className = "rucksack-entry";
+    li.setAttribute("data-rucksack-slug", entry.slug);
+    li.setAttribute("data-rucksack-category", entry.category);
 
     // Plain text, not a link: the entry keeps the full name, the preview is
-    // shortened so a long item name cannot blow up the panel or the modal.
+    // shortened so a long name cannot blow up the panel or the modal.
     const name = document.createElement("span");
-    name.className = "inventory-name";
-    name.textContent = truncateTitle(entry.name);
+    name.className = "rucksack-name";
+    name.textContent = truncateName(entry.name, cfg.maxNameLength);
     // Full name available on hover / to assistive tech.
     name.title = entry.name;
-    if (truncateTitle(entry.name) !== entry.name.trim()) {
+    if (truncateName(entry.name, cfg.maxNameLength) !== entry.name.trim()) {
       name.setAttribute("aria-label", entry.name);
     }
 
+    // A fence with no language still gets a tag, so a row of plain snippets
+    // does not read as a row of unlabelled things.
     const category = document.createElement("span");
-    category.className = "inventory-tag";
-    category.textContent = entry.category;
+    category.className = "rucksack-tag";
+    category.textContent = displayCategory(entry.category);
 
     const quantity = document.createElement("span");
-    quantity.className = "inventory-quantity";
+    quantity.className = "rucksack-quantity";
     quantity.textContent = `\u00d7${entry.quantity}`;
     quantity.title = `Quantity: ${entry.quantity}`;
     quantity.hidden = compact;
 
     const location = document.createElement("span");
-    location.className = "inventory-location";
+    location.className = "rucksack-location";
     location.textContent = entry.location;
     location.hidden = entry.location.length === 0;
     if (entry.location) location.title = `Found in ${entry.location}`;
 
     const meta = document.createElement("span");
-    meta.className = "inventory-meta";
+    meta.className = "rucksack-meta";
     meta.textContent = new Date(entry.timestamp).toLocaleDateString();
     meta.hidden = compact;
 
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "inventory-remove";
-    remove.setAttribute("data-inventory-remove", entry.slug);
-    remove.setAttribute("aria-label", `Remove ${entry.name} from inventory`);
+    remove.className = "rucksack-remove";
+    remove.setAttribute("data-rucksack-remove-entry", entry.slug);
+    remove.setAttribute("aria-label", `Remove ${entry.name} from your rucksack`);
     remove.textContent = "\u00d7";
 
     li.append(name, category, quantity, location, meta, remove);
@@ -470,78 +542,77 @@ function fillList(
   }
 }
 
-/** Re-render every panel and every item button from `entries`. */
-function syncAll(entries: InventoryEntry[]) {
+/** Re-render every panel and every block button from `entries`. */
+function syncAll(entries: RucksackEntry[]) {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
     render(root, entries);
   }
-  refreshItemButtons(entries);
+  refreshBlockButtons(entries);
 }
 
-// --- Item buttons ----------------------------------------------------------
+// --- Block buttons ---------------------------------------------------------
 
-/** Per-item toggle button, injected into the figure wrapping the item block. */
-function mountItemButton(
-  item: DiscoveredItem,
-  storageKey: string,
-  onToggle: (item: DiscoveredItem) => void,
+/** Per-block toggle button, injected into the figure wrapping the block. */
+function mountBlockButton(
+  block: DiscoveredBlock,
+  onToggle: (block: DiscoveredBlock) => void,
 ) {
-  const figure = item.el.closest("figure") ?? item.el;
+  const figure = block.figure;
   // The button lives on the figure, not inside the block, so guard on it (or on
   // the block itself) - otherwise every re-run would stack up another button.
-  const existing = figure.querySelector<HTMLElement>("[data-inventory-item-toggle]");
+  const existing = figure.querySelector<HTMLElement>(`[${TOGGLE_ATTR}]`);
   if (existing) {
-    if (existing.getAttribute("data-inventory-item-toggle") === item.slug) return;
+    if (existing.getAttribute(TOGGLE_ATTR) === block.slug) return;
     existing.remove();
   }
 
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "inventory-item-toggle";
-  button.setAttribute("data-inventory-item-toggle", item.slug);
-  // Carry the item name on the button so state can be refreshed from the store
-  // without keeping a reference to the discovered item.
-  button.setAttribute(ITEM_NAME_ATTR, item.name);
-  button.setAttribute("aria-label", `Stash ${item.name} in your inventory`);
+  button.className = "rucksack-block-toggle";
+  button.setAttribute(TOGGLE_ATTR, block.slug);
+  // Carry the name on the button so state can be refreshed from the store
+  // without keeping a reference to the discovered block.
+  button.setAttribute(NAME_ATTR, block.name);
+  button.setAttribute("aria-label", `Stash ${block.name} in your rucksack`);
 
-  button.addEventListener("click", () => onToggle(item));
+  button.addEventListener("click", () => onToggle(block));
 
   figure.appendChild(button);
 }
 
-/** Discover item blocks and mount their toggle buttons. Idempotent. */
-async function mountItems() {
-  const storageKey = storageKeyFor();
-  const store = await storeFor(storageKey);
+/** Discover stashable blocks and mount their toggle buttons. Idempotent. */
+async function mountBlocks() {
+  const store = await storeFor(storageKeyFor());
 
-  for (const item of discoverItems()) {
-    mountItemButton(item, storageKey, (target) => void toggleItem(store, target));
+  for (const block of discoverBlocks()) {
+    mountBlockButton(block, (target) => void toggleBlock(store, target));
   }
 
-  refreshItemButtons(await store.all());
+  refreshBlockButtons(await store.all());
 }
 
 /**
  * Stash / unstash a block, then repaint everything from the store.
  *
  * A block is identified by its anchor, so stashing one `kompass` never touches
- * the other. Only when the same item name was carried from a *different* page
- * does stashing merge into that row's quantity instead of adding a new one.
+ * the other. Only when the same name was carried from a *different* page
+ * (and `merge` is on) does stashing fold into that row's quantity instead of
+ * adding a new one.
  */
-async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
+async function toggleBlock(store: RucksackStore, block: DiscoveredBlock) {
   const current = await store.all();
 
   // This exact block is already in the bag: take it back out. A block folded
   // into another page's row is unstashed from that row.
-  const own = findSameBlock(current, item.slug);
+  const own = findSameBlock(current, block.slug);
   if (own) {
-    const remaining = entrySources(own).filter((s) => s !== item.slug);
+    const remaining = entrySources(own).filter((s) => s !== block.slug);
     if (remaining.length === 0) {
       await store.remove(own.slug);
     } else {
       await store.put({
         ...own,
-        quantity: Math.max(1, own.quantity - item.quantity),
+        quantity: Math.max(1, own.quantity - block.quantity),
         sources: remaining,
       });
     }
@@ -550,13 +621,13 @@ async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
     return;
   }
 
-  // The same item stashed elsewhere on the site: add to its quantity.
-  const carried = findMergeTarget(current, currentPage(), item.name);
+  // The same name stashed elsewhere on the site: add to its quantity.
+  const carried = config().merge ? findMergeTarget(current, currentPage(), block.name) : undefined;
   if (carried) {
-    const [merged] = addStashedItem(entryFor(item, carried), [carried]);
+    const [merged] = addStashedEntry(entryFor(block, carried), [carried]);
     if (merged) await store.put(merged);
   } else {
-    await store.put(entryFor(item));
+    await store.put(entryFor(block));
   }
 
   syncAll(await store.all());
@@ -566,12 +637,12 @@ async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
 // --- Feedback ---------------------------------------------------------------
 
 /**
- * The "pling" played when an item is stashed, as an inlined data URI so it
+ * The "pling" played when a block is stashed, as an inlined data URI so it
  * works on any static host with no asset pipeline.
  *
  * Autoplay policies reject audio until the page has been interacted with, and
  * every stash is a click, so this normally plays first time. A rejection is
- * swallowed: the inventory is still correct without the sound.
+ * swallowed: the rucksack is still correct without the sound.
  */
 const pling = typeof Audio === "function" ? new Audio(PLING_SRC) : null;
 if (pling) pling.volume = 0.4;
@@ -586,10 +657,10 @@ if (unplink) unplink.volume = 0.35;
  * environments return nothing at all, so normalise before catching.
  */
 function play(sound: HTMLAudioElement | null) {
-  if (!sound) return;
+  if (!sound || !config().sound) return;
   sound.currentTime = 0;
   void Promise.resolve(sound.play()).catch(() => {
-    /* autoplay blocked - the inventory itself is already correct */
+    /* autoplay blocked - the rucksack itself is already correct */
   });
 }
 
@@ -600,7 +671,7 @@ function blink() {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
     root.classList.remove("is-stashing");
     // Force a reflow so re-adding the class restarts the animation even when
-    // two items change in quick succession.
+    // two entries change in quick succession.
     void root.offsetWidth;
     root.classList.add("is-stashing");
   }
@@ -629,22 +700,22 @@ function celebrateRemoval() {
 
 /** Hide the "Show all" modal and release the scroll lock. */
 function closeModal(root: HTMLElement) {
-  root.querySelector<HTMLElement>("[data-inventory-modal]")?.setAttribute("hidden", "");
-  if (!document.querySelector("[data-inventory-modal]:not([hidden])")) {
-    document.documentElement.classList.remove("inventory-modal-open");
+  root.querySelector<HTMLElement>("[data-rucksack-modal]")?.setAttribute("hidden", "");
+  if (!document.querySelector("[data-rucksack-modal]:not([hidden])")) {
+    document.documentElement.classList.remove("rucksack-modal-open");
   }
 }
 
 async function initRoot(root: HTMLElement) {
   // `init` runs again after client-side navigation; never double-bind.
-  if (root.hasAttribute("data-inventory-ready")) return;
-  root.setAttribute("data-inventory-ready", "");
+  if (root.hasAttribute("data-rucksack-ready")) return;
+  root.setAttribute("data-rucksack-ready", "");
 
-  const storageKey = root.getAttribute("data-inventory-key") ?? DEFAULT_STORAGE_KEY;
+  const storageKey = root.getAttribute("data-rucksack-key") ?? config().storageKey;
   const openKey = storageKey + OPEN_KEY_SUFFIX;
-  const panel = root.querySelector<HTMLElement>("[data-inventory-panel]");
+  const panel = root.querySelector<HTMLElement>("[data-rucksack-panel]");
 
-  let store: InventoryStore;
+  let store: RucksackStore;
   try {
     store = await storeFor(storageKey);
   } catch {
@@ -652,11 +723,11 @@ async function initRoot(root: HTMLElement) {
     return;
   }
 
-  const update = async (mutate: (current: InventoryStore) => Promise<void>) => {
+  const update = async (mutate: (current: RucksackStore) => Promise<void>) => {
     try {
       await mutate(store);
     } catch (error: unknown) {
-      console.warn("[inventory] could not update the inventory", error);
+      console.warn("[rucksack] could not update the rucksack", error);
     }
     syncAll(await store.all());
   };
@@ -664,46 +735,46 @@ async function initRoot(root: HTMLElement) {
   const setOpen = (open: boolean) => {
     if (panel) panel.toggleAttribute("hidden", !open);
     root
-      .querySelector<HTMLElement>("[data-inventory-toggle]")
+      .querySelector<HTMLElement>("[data-rucksack-toggle]")
       ?.setAttribute("aria-expanded", String(open));
     write(openKey, open ? "1" : "0");
   };
 
   root
-    .querySelector<HTMLElement>("[data-inventory-toggle]")
+    .querySelector<HTMLElement>("[data-rucksack-toggle]")
     ?.addEventListener("click", () => {
       setOpen(panel ? panel.hasAttribute("hidden") : true);
     });
 
   root
-    .querySelector<HTMLElement>("[data-inventory-clear]")
+    .querySelector<HTMLElement>("[data-rucksack-clear]")
     ?.addEventListener("click", () => {
       void update(async (s) => s.clear()).then(() => closeModal(root));
     });
 
   // --- "Show all" modal ---------------------------------------------------
-  const modal = root.querySelector<HTMLElement>("[data-inventory-modal]");
+  const modal = root.querySelector<HTMLElement>("[data-rucksack-modal]");
 
   const closeDialog = () => closeModal(root);
 
   root
-    .querySelector<HTMLElement>("[data-inventory-show-all]")
+    .querySelector<HTMLElement>("[data-rucksack-show-all]")
     ?.addEventListener("click", () => {
       if (!modal) return;
       // Repaint from the store so the modal is current even if it was opened
       // long after the panel rendered.
       void store.all().then((entries) => render(root, entries)).then(() => {
         modal.removeAttribute("hidden");
-        document.documentElement.classList.add("inventory-modal-open");
-        modal.querySelector<HTMLElement>("[data-inventory-modal-close]")?.focus();
+        document.documentElement.classList.add("rucksack-modal-open");
+        modal.querySelector<HTMLElement>("[data-rucksack-modal-close]")?.focus();
       });
     });
 
   modal
-    ?.querySelector<HTMLElement>("[data-inventory-modal-backdrop]")
+    ?.querySelector<HTMLElement>("[data-rucksack-modal-backdrop]")
     ?.addEventListener("click", closeDialog);
   modal
-    ?.querySelector<HTMLElement>("[data-inventory-modal-close]")
+    ?.querySelector<HTMLElement>("[data-rucksack-modal-close]")
     ?.addEventListener("click", closeDialog);
   // Clicking the backdrop but not the dialog must not close.
   modal?.addEventListener("click", (event) => {
@@ -713,11 +784,11 @@ async function initRoot(root: HTMLElement) {
     if (event.key === "Escape" && modal && !modal.hasAttribute("hidden")) closeDialog();
   });
 
-  // Item metadata (name, quantity, location) is read-only, so the only action
+  // Entry metadata (name, quantity, location) is read-only, so the only action
   // in the lists is removing an entry. Delegated so lists can be re-rendered.
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement | null;
-    const slug = target?.getAttribute?.("data-inventory-remove");
+    const slug = target?.getAttribute?.("data-rucksack-remove-entry");
     if (!slug) return;
     event.preventDefault();
     void update((s) => s.remove(slug)).then(celebrateRemoval);
@@ -731,13 +802,13 @@ async function init() {
   for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
     await initRoot(root);
   }
-  // Item blocks are stowable even on pages that render no inventory panel.
-  await mountItems();
+  // Blocks are stowable even on pages that render no rucksack panel.
+  await mountBlocks();
 }
 
 /**
- * Quartz swaps page content without a reload, so freshly inserted item blocks
- * would never get their buttons. Re-run (idempotently) after every navigation.
+ * Quartz swaps page content without a reload, so freshly inserted blocks would
+ * never get their buttons. Re-run (idempotently) after every navigation.
  */
 function watchNavigation() {
   let queued = false;
@@ -770,11 +841,11 @@ function watchNavigation() {
 
 /**
  * Ask the browser to keep this origin's data around (IndexedDB included).
- * Without it the inventory can be purged when site data is cleared.
+ * Without it the rucksack can be purged when site data is cleared.
  */
 function requestPersistence() {
   void requestPersistentStorage().then((granted) => {
-    document.documentElement.setAttribute("data-inventory-persisted", String(granted));
+    document.documentElement.setAttribute("data-rucksack-persisted", String(granted));
   });
 }
 

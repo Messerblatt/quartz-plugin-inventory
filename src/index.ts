@@ -1,46 +1,64 @@
-export { default as Inventory } from "./components/Inventory";
-export type { InventoryOptions } from "./components/Inventory";
+export { default as Rucksack } from "./components/Rucksack";
+export type { RucksackOptions } from "./lib/config";
 
 export {
   DEFAULT_CATEGORY,
   DEFAULT_STORAGE_KEY,
-  ITEM_CATEGORIES,
-  ITEM_SELECTOR,
-  MAX_DISPLAY_TITLE,
+  MAX_ANCHOR_LENGTH,
+  MAX_DISPLAY_NAME,
+  UNCATEGORIZED,
+  UNCATEGORIZED_LABEL,
   addEntry,
-  addStashedItem,
+  addStashedEntry,
+  anchorForName,
+  blockSelector,
   countStashedBlocks,
+  detailsFromBlock,
+  displayCategory,
   entrySources,
   findMergeTarget,
   findSameBlock,
-  findSameItem,
+  findSameName,
   isBlockCarried,
-  isInventoryEntry,
-  isItemCategory,
-  itemDetailsFromBlock,
-  itemNameFromBlock,
+  isCategory,
+  isLanguageStashable,
+  isRucksackEntry,
+  nameFromBlock,
+  normalizeCategory,
   normalizeEntry,
   normalizeQuantity,
-  parseInventory,
+  parseRucksack,
   removeEntry,
-  removeStashedItem,
-  sameItemName,
-  serializeInventory,
+  removeStashedEntry,
+  sameName,
+  serializeRucksack,
   slugify,
-  sortInventory,
+  sortEntries,
   toggleEntry,
-  truncateTitle,
-} from "./lib/inventory";
-export type { InventoryEntry, ItemCategory, ItemDetails } from "./lib/inventory";
+  truncateName,
+} from "./lib/rucksack";
+export type { EntryDetails, RucksackEntry } from "./lib/rucksack";
 
 export {
-  DexieInventoryStore,
-  InventoryDb,
+  CONFIG_ATTRIBUTES,
+  CONFIG_GLOBAL,
+  CONFIG_SCRIPT_PREFIX,
+  DEFAULT_CONFIG,
+  configAttributes,
+  configFromAttributes,
+  resolveConfig,
+  serializeConfig,
+} from "./lib/config";
+export type { Languages, ResolvedRucksackConfig } from "./lib/config";
+
+export {
+  DexieRucksackStore,
+  RucksackDb,
   databaseName,
-  openInventoryStore,
+  openRucksackStore,
   requestPersistentStorage,
 } from "./lib/db";
-export type { InventoryStore, MetaRecord } from "./lib/db";
+export type { MetaRecord, RucksackStore } from "./lib/db";
 
 export type {
   QuartzComponent,

@@ -1,7 +1,7 @@
 {
-  "name": "@quartz-community/plugin-inventory",
-  "version": "0.1.0",
-  "description": "Inventory plugin for Quartz v5: collect notes into a localStorage-backed backpack.",
+  "name": "@quartz-community/plugin-rucksack",
+  "version": "1.0.0",
+  "description": "Rucksack plugin for Quartz v5: stash anything inside a fenced block into a localStorage/IndexedDB-backed pack.",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -9,7 +9,9 @@
     "quartz-plugin",
     "digital-garden",
     "obsidian",
-    "inventory"
+    "rucksack",
+    "stash",
+    "fenced-blocks"
   ],
   "files": [
     "dist",
@@ -34,7 +36,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/inventory.test.mjs",
+    "test": "npm run build && node test/rucksack.test.mjs",
     "check": "npm run typecheck && npm run test",
     "prepublishOnly": "npm run build"
   },
@@ -61,31 +63,85 @@
     "typescript": "^5.9.3"
   },
   "quartz": {
-    "name": "inventory",
-    "displayName": "Inventory",
+    "name": "rucksack",
+    "displayName": "Rucksack",
     "category": "component",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "quartzVersion": ">=5.0.0",
     "dependencies": [],
     "defaultOrder": 60,
     "defaultEnabled": true,
     "defaultOptions": {
-      "storageKey": "quartz:inventory",
-      "title": "Inventory"
+      "storageKey": "quartz:rucksack",
+      "title": "Rucksack",
+      "icon": "🎒",
+      "removeFromDom": true,
+      "merge": true,
+      "parseDetails": true,
+      "sound": true,
+      "languages": "*"
     },
     "optionSchema": {
       "storageKey": {
         "type": "string",
-        "description": "localStorage key used to persist the inventory."
+        "description": "Database name and localStorage namespace for this rucksack."
       },
       "title": {
         "type": "string",
-        "description": "Label shown on the inventory toggle button."
+        "description": "Label shown on the rucksack toggle button."
+      },
+      "icon": {
+        "type": "string",
+        "description": "Glyph shown next to the title."
+      },
+      "className": {
+        "type": "string",
+        "description": "Wrapper class of the panel."
+      },
+      "languages": {
+        "type": "string | string[]",
+        "description": "Fence languages that can be stashed. \"*\" (default) stashes every fenced block."
+      },
+      "excludeLanguages": {
+        "type": "string[]",
+        "description": "Fence languages to skip, e.g. [\"ts\", \"js\"] to keep code snippets out."
+      },
+      "removeFromDom": {
+        "type": "boolean",
+        "description": "Remove a block from the page when it is stashed (default), or leave it in place and mark it."
+      },
+      "merge": {
+        "type": "boolean",
+        "description": "Merge same-named blocks stashed on other pages into one row."
+      },
+      "parseDetails": {
+        "type": "boolean",
+        "description": "Read quantity (x3) and location (Location: …) hints from the fence."
+      },
+      "nameAttribute": {
+        "type": "string | null",
+        "description": "Read the name from this attribute instead of the block's first line."
+      },
+      "maxNameLength": {
+        "type": "number",
+        "description": "Name length shown in full before the UI elides it."
+      },
+      "sound": {
+        "type": "boolean",
+        "description": "Play a sound when something is stashed or unstashed."
+      },
+      "stashLabel": {
+        "type": "string",
+        "description": "Label on a block's button while it is not stashed."
+      },
+      "stashedLabel": {
+        "type": "string",
+        "description": "Label on a block's button while it is stashed."
       }
     },
     "components": {
-      "Inventory": {
-        "displayName": "Inventory",
+      "Rucksack": {
+        "displayName": "Rucksack",
         "defaultPosition": "right",
         "defaultPriority": 60
       }

@@ -1,18 +1,18 @@
-// Inventory component styles (Quartz v5 plugin, SCSS compiled to a CSS string)
+// Rucksack component styles (Quartz v5 plugin, SCSS compiled to a CSS string)
 
 $inv-bg: var(--light, #fff);
 $inv-fg: var(--dark, #1f1f1f);
 $inv-border: color-mix(in srgb, var(--secondary, #6b6b6b) 35%, transparent);
 $inv-accent: var(--linkColor, #0b6bcb);
 
-.inventory {
+.rucksack {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   font-size: 0.9rem;
   color: $inv-fg;
 
-  .inventory-toggle {
+  .rucksack-toggle {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -35,17 +35,17 @@ $inv-accent: var(--linkColor, #0b6bcb);
     }
   }
 
-  .inventory-icon {
+  .rucksack-icon {
     line-height: 1;
   }
 
-  .inventory-label {
+  .rucksack-label {
     flex: 1;
     text-align: left;
     font-weight: 600;
   }
 
-  .inventory-count {
+  .rucksack-count {
     min-width: 1.5rem;
     padding: 0 0.35rem;
     border-radius: 999px;
@@ -59,7 +59,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
   // The panel is the one part of the component with no border of its own, so it
   // read as loose text floating under the toggle. A light frame groups the
   // entries; it echoes the toggle's radius so the two read as one object.
-  .inventory-panel {
+  .rucksack-panel {
     padding: 0.4rem 0.5rem 0.5rem;
     border: 1px solid $inv-border;
     border-top-left-radius: 0.35rem;
@@ -73,13 +73,13 @@ $inv-accent: var(--linkColor, #0b6bcb);
     margin-top: -1px;
   }
 
-  .inventory-empty {
+  .rucksack-empty {
     margin: 0.25rem 0;
     opacity: 0.7;
     font-style: italic;
   }
 
-  .inventory-list {
+  .rucksack-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -88,7 +88,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     gap: 0.35rem;
   }
 
-  .inventory-entry {
+  .rucksack-entry {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -100,7 +100,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     }
   }
 
-  .inventory-name {
+  .rucksack-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -108,7 +108,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     white-space: nowrap;
   }
 
-  .inventory-tag {
+  .rucksack-tag {
     flex: none;
     padding: 0.05rem 0.35rem;
     border: 1px solid $inv-border;
@@ -119,7 +119,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     opacity: 0.75;
   }
 
-  .inventory-quantity {
+  .rucksack-quantity {
     flex: none;
     font-variant-numeric: tabular-nums;
     font-size: 0.75rem;
@@ -127,7 +127,7 @@ $inv-accent: var(--linkColor, #0b6bcb);
     white-space: nowrap;
   }
 
-  .inventory-location {
+  .rucksack-location {
     font-size: 0.72rem;
     opacity: 0.7;
     overflow: hidden;
@@ -135,13 +135,13 @@ $inv-accent: var(--linkColor, #0b6bcb);
     white-space: nowrap;
   }
 
-  .inventory-meta {
+  .rucksack-meta {
     font-size: 0.72rem;
     opacity: 0.6;
     white-space: nowrap;
   }
 
-  .inventory-remove {
+  .rucksack-remove {
     border: none;
     background: transparent;
     color: inherit;
@@ -159,17 +159,17 @@ $inv-accent: var(--linkColor, #0b6bcb);
 
   // In the narrow sidebar the quantity and date are hidden (they wrapped and
   // broke the column), so rows stay one line: name, location, remove.
-  .inventory-list--compact .inventory-entry {
+  .rucksack-list--compact .rucksack-entry {
     gap: 0.4rem;
   }
 
-  .inventory-actions {
+  .rucksack-actions {
     display: flex;
     justify-content: flex-end;
     margin-top: 0.5rem;
   }
 
-  .inventory-clear {
+  .rucksack-clear {
     border: 1px solid $inv-border;
     background: transparent;
     color: inherit;
@@ -191,12 +191,12 @@ $inv-accent: var(--linkColor, #0b6bcb);
 
 $inv-surface-alt: color-mix(in srgb, var(--secondary, #6b6b6b) 8%, var(--light, #fff));
 
-html.inventory-modal-open,
-html.inventory-modal-open body {
+html.rucksack-modal-open,
+html.rucksack-modal-open body {
   overflow: hidden;
 }
 
-.inventory-modal {
+.rucksack-modal {
   position: fixed;
   inset: 0;
   // Well above Quartz's sidebars (`.left-sidebar` stacks around 400) and its
@@ -207,18 +207,18 @@ html.inventory-modal-open body {
     display: none;
   }
 
-  .inventory-modal-backdrop {
+  .rucksack-modal-backdrop {
     position: absolute;
     inset: 0;
     background: color-mix(in srgb, var(--darkgray, #333) 45%, transparent);
   }
 
-  .inventory-modal-content {
+  .rucksack-modal-content {
     position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    // Wide enough that every item stays on a single line: name, category,
+    // Wide enough that every entry stays on a single line: name, category,
     // quantity, location, date and remove button never wrap.
     width: min(52rem, calc(100vw - 2rem));
     max-height: min(70vh, 40rem);
@@ -237,7 +237,7 @@ html.inventory-modal-open body {
     }
   }
 
-  .inventory-modal-header {
+  .rucksack-modal-header {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -245,13 +245,13 @@ html.inventory-modal-open body {
     border-bottom: 1px solid $inv-border;
   }
 
-  .inventory-modal-title {
+  .rucksack-modal-title {
     flex: 1;
     font-weight: 600;
     font-size: 1rem;
   }
 
-  .inventory-modal-close {
+  .rucksack-modal-close {
     border: none;
     background: transparent;
     color: inherit;
@@ -268,19 +268,19 @@ html.inventory-modal-open body {
     }
   }
 
-  .inventory-modal-hint {
+  .rucksack-modal-hint {
     margin: 0;
     font-size: 0.75rem;
     opacity: 0.7;
   }
 
-  .inventory-modal-list {
+  .rucksack-modal-list {
     // Entries get a little more breathing room than in the side panel.
     gap: 0.25rem;
   }
 
-  // One item = one line: a single grid row per entry, nothing wraps.
-  .inventory-entry {
+  // One entry = one line: a single grid row per entry, nothing wraps.
+  .rucksack-entry {
     display: grid;
     grid-template-columns:
       minmax(0, 1fr) auto auto minmax(0, 12rem) auto auto;
@@ -292,45 +292,69 @@ html.inventory-modal-open body {
     white-space: nowrap;
   }
 
-  .inventory-name,
-  .inventory-location {
+  .rucksack-name,
+  .rucksack-location {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .inventory-meta,
-  .inventory-quantity,
-  .inventory-tag,
-  .inventory-remove {
+  .rucksack-meta,
+  .rucksack-quantity,
+  .rucksack-tag,
+  .rucksack-remove {
     flex: none;
   }
 }
 
-// --- Item blocks -----------------------------------------------------------
-// ```item fences rendered by rehype-pretty-code, tagged at runtime.
+// --- Stashable blocks ------------------------------------------------------
+// Fenced blocks rendered by rehype-pretty-code, tagged at runtime.
 //
-// A stashed block is removed from the DOM entirely (see parkBlock), so there is
-// no "stashed" styling to do here - only the live block needs rules.
+// With `removeFromDom: true` (the default) a stashed block is removed from the
+// DOM entirely (see parkBlock), so there is no "stashed" styling to do on the
+// block - only the live block needs rules, plus a marker for the mode where
+// stashing leaves the block in place.
 
-figure:has(> pre[data-language="item"]) {
+figure:has(> pre) {
   position: relative;
   margin: 1rem 0;
 }
 
-.inventory-item-block {
-  font-style: italic;
-
+.rucksack-block {
   // The fence's leading/trailing newline render as empty `span[data-line]`
   // elements. They are tagged at runtime, so a one-line fence whose only line
-  // is the item name keeps rendering its text.
+  // is the name keeps rendering its text.
   .is-blank-line {
     display: none;
   }
+
+  // `removeFromDom: false`: the block stays on the page, so it needs to say it
+  // is in the rucksack. Dimming recedes it without hiding it, so prose that
+  // refers to the snippet still reads.
+  &.is-stashed {
+    opacity: 0.55;
+    filter: saturate(0.6);
+  }
 }
 
-.inventory-item-toggle {
+figure.is-stashed {
+  position: relative;
+
+  // A left rule marks the block without touching its own layout.
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0.5rem;
+    bottom: 0.5rem;
+    left: -0.6rem;
+    width: 2px;
+    border-radius: 2px;
+    background: $inv-accent;
+  }
+}
+
+.rucksack-block-toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -361,9 +385,9 @@ figure:has(> pre[data-language="item"]) {
 // --- Stash feedback --------------------------------------------------------
 // A short blink on the panel whenever something is stashed, so the change is
 // visible even when the panel is off to the side. Duration must match BLINK_MS
-// in inventory.inline.ts, which strips the class after the animation ends.
+// in rucksack.inline.ts, which strips the class after the animation ends.
 
-@keyframes inventory-stash-blink {
+@keyframes rucksack-stash-blink {
   0%,
   100% {
     box-shadow: none;
@@ -385,15 +409,15 @@ figure:has(> pre[data-language="item"]) {
   }
 }
 
-.inventory.is-stashing {
+.rucksack.is-stashing {
   border-radius: 0.75rem;
-  animation: inventory-stash-blink 0.62s ease-out;
+  animation: rucksack-stash-blink 0.62s ease-out;
 }
 
 // Respect a stated preference for less motion: keep the colour pulse, drop the
 // movement, and never let the blink be the only feedback for a stash.
 @media (prefers-reduced-motion: reduce) {
-  .inventory.is-stashing {
+  .rucksack.is-stashing {
     animation: none;
     outline: 2px solid $inv-accent;
     outline-offset: 2px;
