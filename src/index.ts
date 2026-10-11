@@ -9,6 +9,8 @@ export {
   MAX_DISPLAY_TITLE,
   addEntry,
   addStashedItem,
+  countStashedBlocks,
+  entrySources,
   findMergeTarget,
   findSameBlock,
   findSameItem,

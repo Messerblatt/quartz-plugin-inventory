@@ -291,6 +291,9 @@ html.inventory-modal-open body {
 
 // --- Item blocks -----------------------------------------------------------
 // ```item fences rendered by rehype-pretty-code, tagged at runtime.
+//
+// A stashed block is removed from the DOM entirely (see parkBlock), so there is
+// no "stashed" styling to do here - only the live block needs rules.
 
 figure:has(> pre[data-language="item"]) {
   position: relative;
@@ -304,12 +307,6 @@ figure:has(> pre[data-language="item"]) {
   // elements. They are tagged at runtime, so a one-line fence whose only line
   // is the item name keeps rendering its text.
   .is-blank-line {
-    display: none;
-  }
-
-  // A stashed item keeps its block (so the anchor still resolves) but shows no
-  // text at all - the name now lives in the inventory panel only.
-  &.is-stashed-item span[data-line] {
     display: none;
   }
 }
@@ -339,5 +336,47 @@ figure:has(> pre[data-language="item"]) {
     border-color: $inv-accent;
     color: $inv-accent;
     opacity: 1;
+  }
+}
+
+// --- Stash feedback --------------------------------------------------------
+// A short blink on the panel whenever something is stashed, so the change is
+// visible even when the panel is off to the side. Duration must match BLINK_MS
+// in inventory.inline.ts, which strips the class after the animation ends.
+
+@keyframes inventory-stash-blink {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+
+  18% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, $inv-accent 55%, transparent);
+    background: color-mix(in srgb, $inv-accent 12%, var(--light, #fff));
+  }
+
+  42% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, $inv-accent 30%, transparent);
+    background: transparent;
+  }
+
+  62% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, $inv-accent 40%, transparent);
+    background: color-mix(in srgb, $inv-accent 8%, var(--light, #fff));
+  }
+}
+
+.inventory.is-stashing {
+  border-radius: 0.75rem;
+  animation: inventory-stash-blink 0.62s ease-out;
+}
+
+// Respect a stated preference for less motion: keep the colour pulse, drop the
+// movement, and never let the blink be the only feedback for a stash.
+@media (prefers-reduced-motion: reduce) {
+  .inventory.is-stashing {
+    animation: none;
+    outline: 2px solid $inv-accent;
+    outline-offset: 2px;
   }
 }

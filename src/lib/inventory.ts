@@ -22,6 +22,13 @@ export interface InventoryEntry {
   page: string;
   /** Anchor id of the item block on that page. */
   anchor: string;
+  /**
+   * Every `page#anchor` block folded into this row. Normally just the entry's
+   * own `slug`; a second block of the same item found on another page merges
+   * into this row rather than making a new one, and this is how that block
+   * still knows it is stashed (and can be unstashed again).
+   */
+  sources?: string[];
 }
 
 export const DEFAULT_STORAGE_KEY = "quartz:inventory";
@@ -93,13 +100,18 @@ export function findSameItem(
   return entries.find((e) => sameItemName(e.name, name));
 }
 
+/** All `page#anchor` blocks folded into this row, its own slug included. */
+export function entrySources(entry: InventoryEntry): string[] {
+  return [...new Set([entry.slug, ...(entry.sources ?? [])])];
+}
+
 /** The entry stashed from this exact block, if any. Blocks are identified by
  *  their anchor, so two `kompass` blocks on one page are two separate items. */
 export function findSameBlock(
   entries: InventoryEntry[],
   slug: string,
 ): InventoryEntry | undefined {
-  return entries.find((e) => e.slug === slug);
+  return entries.find((e) => entrySources(e).includes(slug));
 }
 
 /**
@@ -128,6 +140,15 @@ export function isBlockCarried(entries: InventoryEntry[], slug: string): boolean
   return findSameBlock(entries, slug) !== undefined;
 }
 
+/**
+ * Total number of item blocks folded into these entries, counting each merged
+ * block once. Used to keep the panel badge honest when a row covers several
+ * blocks.
+ */
+export function countStashedBlocks(entries: InventoryEntry[]): number {
+  return new Set(entries.flatMap(entrySources)).size;
+}
+
 /** Fill in defaults for anything a stored record (or legacy payload) lacks. */
 export function normalizeEntry(value: unknown): InventoryEntry | null {
   if (typeof value !== "object" || value === null) return null;
@@ -153,23 +174,28 @@ export function normalizeEntry(value: unknown): InventoryEntry | null {
     timestamp,
     page: typeof entry.page === "string" ? entry.page : "",
     anchor: typeof entry.anchor === "string" ? entry.anchor : "",
+    sources: Array.isArray(entry.sources)
+      ? entry.sources.filter((s): s is string => typeof s === "string" && s.length > 0)
+      : undefined,
   };
 }
 
 /**
  * Add a freshly stashed item. If the same item is already carried, its quantity
- * grows instead of a second row appearing.
+ * grows instead of a second row appearing, and the new block is recorded in
+ * `sources` so it still reads as stashed - and can be unstashed - on its own.
  */
 export function addStashedItem(
   entry: InventoryEntry,
   current: InventoryEntry[],
 ): InventoryEntry[] {
   const existing = findSameItem(current, entry.name);
-  if (!existing) return [entry, ...current];
+  if (!existing) return [{ ...entry, sources: entrySources(entry) }, ...current];
 
   const merged: InventoryEntry = {
     ...existing,
     quantity: normalizeQuantity(existing.quantity + entry.quantity),
+    sources: [...new Set([...entrySources(existing), ...entrySources(entry)])],
   };
 
   return [merged, ...current.filter((e) => e !== existing)];

@@ -3,9 +3,29 @@ import type { Plugin } from "esbuild";
 import path from "path";
 
 /**
+ * Sounds are inlined as data URIs so a published plugin works from any static
+ * host with no asset pipeline and no extra fetch on first stash.
+ *
+ * Registered twice: once on the main build, and again inside the nested build
+ * that compiles `.inline.ts`, which would otherwise fail to resolve the import.
+ */
+const assetLoader: Plugin = {
+  name: "inline-asset-loader",
+  setup(build) {
+    build.onLoad({ filter: /\.mp3$/ }, async (args) => {
+      const fs = await import("fs");
+      const bytes = await fs.promises.readFile(args.path);
+      const uri = `data:audio/mpeg;base64,${bytes.toString("base64")}`;
+      return { contents: `export default ${JSON.stringify(uri)};`, loader: "js" };
+    });
+  },
+};
+
+/**
  * Esbuild plugin mirroring Quartz v5's own `inline-script-loader`:
  *  - `.scss`      -> compiled with sass, loaded as a CSS text string
  *  - `.inline.ts` -> transpiled + bundled for the browser, loaded as a JS text string
+ *  - `.mp3`       -> inlined as a base64 data URI (the plugin ships no files)
  *
  * Components then do `Component.css = style` / `Component.afterDOMLoaded = script`.
  */
@@ -44,6 +64,7 @@ const inlineScriptPlugin: Plugin = {
         target: "es2020",
         sourcemap: false,
         external: ["http://*", "https://*"],
+        plugins: [assetLoader],
       });
 
       const js = result.outputFiles?.[0]?.text;

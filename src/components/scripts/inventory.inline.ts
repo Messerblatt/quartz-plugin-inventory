@@ -19,11 +19,13 @@
  * must be readable synchronously while the panel renders.
  */
 
+import PLING_SRC from "../assets/pling.mp3";
 import {
   DEFAULT_CATEGORY,
   DEFAULT_STORAGE_KEY,
   ITEM_SELECTOR,
   addStashedItem,
+  entrySources,
   findMergeTarget,
   findSameBlock,
   isBlockCarried,
@@ -45,6 +47,8 @@ import {
 const OPEN_KEY_SUFFIX = ":open";
 const ROOT_SELECTOR = "[data-inventory]";
 const ITEM_NAME_ATTR = "data-inventory-item-title";
+/** Keep in sync with the `.is-stashing` animation in inventory.scss. */
+const BLINK_MS = 620;
 
 function read(key: string): string | null {
   try {
@@ -124,6 +128,36 @@ function itemBlocks(): HTMLElement[] {
   return blocks;
 }
 
+/**
+ * Stashed blocks, keyed by anchor, with the comment node left behind in their
+ * place.
+ *
+ * A stashed item is removed from the document entirely - fence, figure and
+ * "+ Stash" button - so the page reads like the item was picked up. The element
+ * is parked here rather than discarded, and the placeholder remembers where it
+ * belongs, so unstashing it later (from the panel's remove button) puts it back
+ * exactly where it was instead of leaving a hole.
+ */
+const parkedBlocks = new Map<string, { figure: HTMLElement; placeholder: Comment }>();
+
+/** Take a stashed block out of the page. Idempotent. */
+function parkBlock(anchor: string, figure: HTMLElement) {
+  if (parkedBlocks.has(anchor)) return;
+  const placeholder = document.createComment(`inventory:stashed:${anchor}`);
+  figure.replaceWith(placeholder);
+  parkedBlocks.set(anchor, { figure, placeholder });
+}
+
+/** Put an unstashed block back where it came from. Idempotent. */
+function unparkBlock(anchor: string) {
+  const parked = parkedBlocks.get(anchor);
+  if (!parked) return;
+  parkedBlocks.delete(anchor);
+  // The placeholder's parent is gone when Quartz re-rendered the page; the fresh
+  // markup is rediscovered and re-parked instead, so drop the stale copy.
+  if (parked.placeholder.parentNode) parked.placeholder.replaceWith(parked.figure);
+}
+
 interface DiscoveredItem {
   el: HTMLElement;
   name: string;
@@ -180,27 +214,48 @@ function discoverItems(): DiscoveredItem[] {
   const items: DiscoveredItem[] = [];
   const used = new Map<string, number>();
 
+  // Parked (stashed) blocks are gone from the document but still hold their
+  // anchors. Keep their slots reserved, or the anchors of the blocks after them
+  // would shift down and a "kompass-1" would quietly become a "kompass" - a
+  // different item in the store. Live blocks take the lowest free slot.
+  const taken = new Map<string, Set<number>>();
+  for (const anchor of parkedBlocks.keys()) {
+    const cut = anchor.lastIndexOf("-");
+    const index = cut > 0 ? Number.parseInt(anchor.slice(cut + 1), 10) : NaN;
+    const base = Number.isFinite(index) ? anchor.slice(0, cut) : anchor;
+    const slot = Number.isFinite(index) ? index : 0;
+    if (!taken.has(base)) taken.set(base, new Set());
+    taken.get(base)?.add(slot);
+  }
+
+  const nextFreeSlot = (base: string): number => {
+    let used = taken.get(base);
+    if (!used) {
+      used = new Set<number>();
+      taken.set(base, used);
+    }
+    let slot = 0;
+    while (used.has(slot)) slot += 1;
+    used.add(slot);
+    return slot;
+  };
+
   for (const el of itemBlocks()) {
     markBlankLines(el);
     // ```item is the default; ```event / ```secret and friends get their own.
     const category = blockCategory(el);
 
-    // Prefer the rendered text; fall back to the name captured on a previous
-    // run so a block whose text is hidden (stashed) still gets its button.
+    // Stashed blocks are parked out of the document, so everything below is
+    // reading a live block with its text intact.
     const name = itemName(el) || el.getAttribute(ITEM_NAME_ATTR) || "";
     if (!name) continue;
 
     const details = itemDetailsFromBlock(itemBlockText(el));
-    // A stashed block has no visible text, so its hints cannot be re-read.
-    const stashed = el.classList.contains("is-stashed-item");
-    const quantity = stashed ? 1 : details.quantity;
-    const location = stashed ? "" : details.location;
 
     const base = slugify(name) || "item";
     // De-duplicate anchors when a page repeats the same item name.
-    const seen = used.get(base) ?? 0;
-    used.set(base, seen + 1);
-    const anchor = seen === 0 ? base : `${base}-${seen}`;
+    const slot = nextFreeSlot(base);
+    const anchor = slot === 0 ? base : `${base}-${slot}`;
     const slug = `${page}#${anchor}`;
 
     el.setAttribute("data-inventory-item", anchor);
@@ -209,14 +264,22 @@ function discoverItems(): DiscoveredItem[] {
     el.classList.add("inventory-item-block");
     el.classList.add(`inventory-item-block--${category}`);
 
-    items.push({ el, name, slug, anchor, category, quantity, location });
+    items.push({
+      el,
+      name,
+      slug,
+      anchor,
+      category,
+      quantity: details.quantity,
+      location: details.location,
+    });
   }
 
   return items;
 }
 
 /** The entry a block maps to when stashed. Existing entries keep their
- *  quantity/location so re-stashing never resets them. */
+ *  quantity/location/timestamp so re-stashing never resets them. */
 function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEntry {
   return {
     slug: item.slug,
@@ -227,6 +290,7 @@ function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEnt
     timestamp: existing?.timestamp ?? new Date().toISOString(),
     page: currentPage(),
     anchor: item.anchor,
+    sources: existing ? [...new Set([...entrySources(existing), item.slug])] : [item.slug],
   };
 }
 
@@ -249,11 +313,33 @@ function refreshItemButtons(entries: InventoryEntry[]) {
     button.classList.toggle("is-stashed", stashed);
   }
 
+  // Stashed blocks leave the page entirely - fence, figure and button - so the
+  // reader sees a clean page and can no longer re-stash the same block.
   for (const el of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
   )) {
-    el.classList.toggle("is-stashed-item", isCarried(entries, el));
+    const anchor = el.getAttribute("data-inventory-item");
+    if (!anchor) continue;
+    if (isCarried(entries, el)) parkBlock(anchor, figureOf(el));
+    else unparkBlock(anchor);
   }
+
+  // Parked blocks are out of the document, so their buttons cannot be found by
+  // the loop above; clear the stale one before the figure goes back in.
+  for (const [anchor, parked] of parkedBlocks) {
+    const button = parked.figure.querySelector<HTMLElement>("[data-inventory-item-toggle]");
+    if (!button) continue;
+    const stashed = isCarried(entries, button);
+    button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
+    button.setAttribute("aria-pressed", String(stashed));
+    button.classList.toggle("is-stashed", stashed);
+    if (!stashed) unparkBlock(anchor);
+  }
+}
+
+/** The <figure> wrapping an item block - what actually leaves the page. */
+function figureOf(el: HTMLElement): HTMLElement {
+  return el.closest("figure") ?? el;
 }
 
 /**
@@ -423,10 +509,20 @@ async function mountItems() {
 async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
   const current = await store.all();
 
-  // This exact block is already in the bag: take it back out.
+  // This exact block is already in the bag: take it back out. A block folded
+  // into another page's row is unstashed from that row.
   const own = findSameBlock(current, item.slug);
   if (own) {
-    await store.remove(own.slug);
+    const remaining = entrySources(own).filter((s) => s !== item.slug);
+    if (remaining.length === 0) {
+      await store.remove(own.slug);
+    } else {
+      await store.put({
+        ...own,
+        quantity: Math.max(1, own.quantity - item.quantity),
+        sources: remaining,
+      });
+    }
     syncAll(await store.all());
     return;
   }
@@ -441,6 +537,50 @@ async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
   }
 
   syncAll(await store.all());
+  celebrate();
+}
+
+// --- Feedback ---------------------------------------------------------------
+
+/**
+ * The "pling" played when an item is stashed, as an inlined data URI so it
+ * works on any static host with no asset pipeline.
+ *
+ * Autoplay policies reject audio until the page has been interacted with, and
+ * every stash is a click, so this normally plays first time. A rejection is
+ * swallowed: the inventory is still correct without the sound.
+ */
+const pling = typeof Audio === "function" ? new Audio(PLING_SRC) : null;
+if (pling) pling.volume = 0.4;
+
+/** Blink the panel so stashing is visible somewhere even off to the side. */
+function blink() {
+  for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
+    root.classList.remove("is-stashing");
+    // Force a reflow so re-adding the class restarts the animation even when
+    // two items are stashed in quick succession.
+    void root.offsetWidth;
+    root.classList.add("is-stashing");
+  }
+}
+
+let blinkTimer: ReturnType<typeof setTimeout> | undefined;
+function celebrate() {
+  blink();
+  clearTimeout(blinkTimer);
+  blinkTimer = setTimeout(() => {
+    for (const root of Array.from(document.querySelectorAll<HTMLElement>(ROOT_SELECTOR))) {
+      root.classList.remove("is-stashing");
+    }
+  }, BLINK_MS);
+
+  if (!pling) return;
+  pling.currentTime = 0;
+  // Browsers return a promise that rejects when autoplay is blocked; some
+  // environments return nothing at all, so normalise before catching.
+  void Promise.resolve(pling.play()).catch(() => {
+    /* autoplay blocked - the stash itself already succeeded */
+  });
 }
 
 // --- Component wiring ------------------------------------------------------
