@@ -24,7 +24,9 @@ import {
   DEFAULT_STORAGE_KEY,
   ITEM_SELECTOR,
   addStashedItem,
-  findSameItem,
+  findMergeTarget,
+  findSameBlock,
+  isBlockCarried,
   isItemCategory,
   itemDetailsFromBlock,
   itemNameFromBlock,
@@ -232,14 +234,16 @@ function entryFor(item: DiscoveredItem, existing?: InventoryEntry): InventoryEnt
 
 /**
  * Keep every item button (and its block) on the page in sync with the carried
- * items. State is decided by name: every block showing the same item is
- * "stashed" once that item is in the inventory.
+ * items.
+ *
+ * State is decided by the block's anchor, not by its name: two `kompass` blocks
+ * on one page are two items, so stashing one leaves the other as "+ Stash".
  */
 function refreshItemButtons(entries: InventoryEntry[]) {
   for (const button of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item-toggle]"),
   )) {
-    const stashed = isCarried(entries, button.getAttribute(ITEM_NAME_ATTR));
+    const stashed = isCarried(entries, button);
     button.textContent = stashed ? "\u2713 Stashed" : "+ Stash";
     button.setAttribute("aria-pressed", String(stashed));
     button.classList.toggle("is-stashed", stashed);
@@ -248,13 +252,21 @@ function refreshItemButtons(entries: InventoryEntry[]) {
   for (const el of Array.from(
     document.querySelectorAll<HTMLElement>("[data-inventory-item]"),
   )) {
-    el.classList.toggle("is-stashed-item", isCarried(entries, el.getAttribute(ITEM_NAME_ATTR)));
+    el.classList.toggle("is-stashed-item", isCarried(entries, el));
   }
 }
 
-/** Is this item (by name) currently in the inventory? */
-function isCarried(entries: InventoryEntry[], name: string | null): boolean {
-  return name != null && findSameItem(entries, name) !== undefined;
+/**
+ * Is this element's block the one in the bag? The block carries its page-local
+ * anchor in `data-inventory-item`; the button carries the full `page#anchor` slug
+ * in `data-inventory-item-toggle`. Both reduce to the same anchor.
+ */
+function isCarried(entries: InventoryEntry[], el: HTMLElement): boolean {
+  const anchor =
+    el.getAttribute("data-inventory-item") ??
+    el.getAttribute("data-inventory-item-toggle")?.split("#").pop();
+  if (!anchor) return false;
+  return isBlockCarried(entries, `${currentPage()}#${anchor}`);
 }
 
 function setBadge(root: HTMLElement, count: number) {
@@ -404,22 +416,28 @@ async function mountItems() {
 /**
  * Stash / unstash a block, then repaint everything from the store.
  *
- * Items are matched by name: stashing another "health" while one is carried
- * raises its quantity instead of adding a second row, and unstashing takes
- * that quantity back out again.
+ * A block is identified by its anchor, so stashing one `kompass` never touches
+ * the other. Only when the same item name was carried from a *different* page
+ * does stashing merge into that row's quantity instead of adding a new one.
  */
 async function toggleItem(store: InventoryStore, item: DiscoveredItem) {
   const current = await store.all();
-  const existing = findSameItem(current, item.name);
 
-  if (!existing) {
-    await store.put(entryFor(item));
-  } else if (existing.slug === item.slug) {
-    // This very block is in the bag: drop it entirely.
-    await store.remove(existing.slug);
-  } else {
-    const [merged] = addStashedItem(entryFor(item, existing), [existing]);
+  // This exact block is already in the bag: take it back out.
+  const own = findSameBlock(current, item.slug);
+  if (own) {
+    await store.remove(own.slug);
+    syncAll(await store.all());
+    return;
+  }
+
+  // The same item stashed elsewhere on the site: add to its quantity.
+  const carried = findMergeTarget(current, currentPage(), item.name);
+  if (carried) {
+    const [merged] = addStashedItem(entryFor(item, carried), [carried]);
     if (merged) await store.put(merged);
+  } else {
+    await store.put(entryFor(item));
   }
 
   syncAll(await store.all());

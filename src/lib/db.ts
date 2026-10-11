@@ -35,9 +35,9 @@ export class InventoryDb extends Dexie {
 
   constructor(storageKey: string = DEFAULT_STORAGE_KEY) {
     super(databaseName(storageKey));
-    // slug is the primary key; timestamp/category are indexed for sorting and
-    // the category filters planned for ```event / ```secret. Identical items
-    // are recognised by name, so there is no key to manage for that.
+    // slug (`page#anchor`) is the primary key, so every block on every page is
+    // its own item; timestamp/category are indexed for sorting and the category
+    // filters planned for ```event / ```secret.
     this.version(1).stores({
       items: "slug, timestamp, category",
       meta: "key",

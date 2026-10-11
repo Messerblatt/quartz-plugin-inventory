@@ -93,6 +93,41 @@ export function findSameItem(
   return entries.find((e) => sameItemName(e.name, name));
 }
 
+/** The entry stashed from this exact block, if any. Blocks are identified by
+ *  their anchor, so two `kompass` blocks on one page are two separate items. */
+export function findSameBlock(
+  entries: InventoryEntry[],
+  slug: string,
+): InventoryEntry | undefined {
+  return entries.find((e) => e.slug === slug);
+}
+
+/**
+ * The carried item this block should merge into: the same name, but stashed from
+ * a *different* page. Merging is deliberate across pages (a `kompass` found in
+ * the cellar is the same kompass found in the shed) and deliberately not within
+ * one page, where repeated names are distinct blocks.
+ */
+export function findMergeTarget(
+  entries: InventoryEntry[],
+  page: string,
+  name: string,
+): InventoryEntry | undefined {
+  return entries.find((e) => e.page !== page && sameItemName(e.name, name));
+}
+
+/**
+ * Is this block (identified by its `page#anchor` slug) the one in the bag?
+ *
+ * Strictly by anchor. Carrying a `kompass` stashed on another page says nothing
+ * about *this* block, and letting it leak across would light up every repeated
+ * name on the page - the bug this replaced. Merging across pages happens in the
+ * inventory row (see `findMergeTarget`), not in the block's own state.
+ */
+export function isBlockCarried(entries: InventoryEntry[], slug: string): boolean {
+  return findSameBlock(entries, slug) !== undefined;
+}
+
 /** Fill in defaults for anything a stored record (or legacy payload) lacks. */
 export function normalizeEntry(value: unknown): InventoryEntry | null {
   if (typeof value !== "object" || value === null) return null;
