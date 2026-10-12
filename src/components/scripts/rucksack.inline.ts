@@ -34,12 +34,9 @@ import {
   isLanguageStashable,
   nameFromBlock,
   normalizeCategory,
-  RUCKSACK_EVENTS,
   addStashedEntry,
   sortEntries,
   truncateName,
-  type RucksackEventDetail,
-  type RucksackEventSource,
   type RucksackEntry,
 } from "../../lib/rucksack.ts";
 import {
@@ -64,31 +61,6 @@ const BLINK_MS = 620;
 /** Attribute the toggle button is mounted with, and the block it points at. */
 const TOGGLE_ATTR = "data-rucksack-toggle-block";
 
-/**
- * Notify the host Quartz site after a successful stash operation. Events are
- * dispatched on `document`, matching Quartz's own navigation events and making
- * them available to site code without coupling the plugin to a global API.
- */
-function emitRucksackEvent(
-  name: (typeof RUCKSACK_EVENTS)[keyof typeof RUCKSACK_EVENTS],
-  entry: RucksackEntry,
-  storageKey: string,
-  source: RucksackEventSource,
-) {
-  const detail: RucksackEventDetail = {
-    entry: {
-      ...entry,
-      sources: entry.sources ? [...entry.sources] : undefined,
-    },
-    storageKey,
-    source,
-  };
-  document.dispatchEvent(new CustomEvent(name, { detail }));
-  if (eventLoggingEnabled()) {
-    console.log(`[rucksack] ${name}`, detail);
-  }
-}
-
 // --- Configuration ---------------------------------------------------------
 
 /**
@@ -107,39 +79,6 @@ function config(): ResolvedRucksackConfig {
   cachedConfig = resolveConfig({ ...(base as Partial<RucksackOptions>), ...attrs });
   return cachedConfig;
 }
-
-interface RucksackDebugApi {
-  setEventLogging(enabled: boolean): void;
-  getEventLogging(): boolean;
-}
-
-let eventLoggingOverride: boolean | undefined;
-
-function eventLoggingEnabled(): boolean {
-  return eventLoggingOverride ?? config().logEvents;
-}
-
-/**
- * Small page-local API for debugging from the browser console. The override is
- * intentionally not persisted: a production reload returns to `logEvents`.
- */
-function installDebugApi() {
-  const host = window as Window & {
-    __RUCKSACK__?: RucksackDebugApi & Record<string, unknown>;
-  };
-  const api: RucksackDebugApi & Record<string, unknown> =
-    host.__RUCKSACK__ && typeof host.__RUCKSACK__ === "object"
-      ? host.__RUCKSACK__
-      : ({} as RucksackDebugApi & Record<string, unknown>);
-
-  api.setEventLogging = (enabled: boolean) => {
-    eventLoggingOverride = Boolean(enabled);
-  };
-  api.getEventLogging = () => eventLoggingEnabled();
-  host.__RUCKSACK__ = api;
-}
-
-installDebugApi();
 
 function read(key: string): string | null {
   try {
@@ -643,11 +582,10 @@ function mountBlockButton(
 
 /** Discover stashable blocks and mount their toggle buttons. Idempotent. */
 async function mountBlocks() {
-  const storageKey = storageKeyFor();
-  const store = await storeFor(storageKey);
+  const store = await storeFor(storageKeyFor());
 
   for (const block of discoverBlocks()) {
-    mountBlockButton(block, (target) => void toggleBlock(store, target, storageKey));
+    mountBlockButton(block, (target) => void toggleBlock(store, target));
   }
 
   refreshBlockButtons(await store.all());
@@ -661,14 +599,13 @@ async function mountBlocks() {
  * (and `merge` is on) does stashing fold into that row's quantity instead of
  * adding a new one.
  */
-async function toggleBlock(store: RucksackStore, block: DiscoveredBlock, storageKey: string) {
+async function toggleBlock(store: RucksackStore, block: DiscoveredBlock) {
   const current = await store.all();
 
   // This exact block is already in the bag: take it back out. A block folded
   // into another page's row is unstashed from that row.
   const own = findSameBlock(current, block.slug);
   if (own) {
-    const eventEntry = entryFor(block);
     const remaining = entrySources(own).filter((s) => s !== block.slug);
     if (remaining.length === 0) {
       await store.remove(own.slug);
@@ -680,14 +617,12 @@ async function toggleBlock(store: RucksackStore, block: DiscoveredBlock, storage
       });
     }
     syncAll(await store.all());
-    emitRucksackEvent(RUCKSACK_EVENTS.unstashed, eventEntry, storageKey, "block");
     celebrateRemoval();
     return;
   }
 
   // The same name stashed elsewhere on the site: add to its quantity.
   const carried = config().merge ? findMergeTarget(current, currentPage(), block.name) : undefined;
-  const eventEntry = entryFor(block);
   if (carried) {
     const [merged] = addStashedEntry(entryFor(block, carried), [carried]);
     if (merged) await store.put(merged);
@@ -696,7 +631,6 @@ async function toggleBlock(store: RucksackStore, block: DiscoveredBlock, storage
   }
 
   syncAll(await store.all());
-  emitRucksackEvent(RUCKSACK_EVENTS.stashed, eventEntry, storageKey, "block");
   celebrate();
 }
 
@@ -789,15 +723,13 @@ async function initRoot(root: HTMLElement) {
     return;
   }
 
-  const update = async (mutate: (current: RucksackStore) => Promise<void>): Promise<boolean> => {
+  const update = async (mutate: (current: RucksackStore) => Promise<void>) => {
     try {
       await mutate(store);
     } catch (error: unknown) {
       console.warn("[rucksack] could not update the rucksack", error);
-      return false;
     }
     syncAll(await store.all());
-    return true;
   };
 
   const setOpen = (open: boolean) => {
@@ -817,15 +749,7 @@ async function initRoot(root: HTMLElement) {
   root
     .querySelector<HTMLElement>("[data-rucksack-clear]")
     ?.addEventListener("click", () => {
-      void (async () => {
-        const before = await store.all();
-        if (!(await update(async (s) => s.clear()))) return;
-        for (const entry of before) {
-          emitRucksackEvent(RUCKSACK_EVENTS.unstashed, entry, storageKey, "clear");
-        }
-        celebrateRemoval();
-        closeModal(root);
-      })();
+      void update(async (s) => s.clear()).then(() => closeModal(root));
     });
 
   // --- "Show all" modal ---------------------------------------------------
@@ -867,12 +791,7 @@ async function initRoot(root: HTMLElement) {
     const slug = target?.getAttribute?.("data-rucksack-remove-entry");
     if (!slug) return;
     event.preventDefault();
-    void (async () => {
-      const entry = await store.get(slug);
-      if (!(await update((s) => s.remove(slug)))) return;
-      if (entry) emitRucksackEvent(RUCKSACK_EVENTS.unstashed, entry, storageKey, "panel");
-      celebrateRemoval();
-    })();
+    void update((s) => s.remove(slug)).then(celebrateRemoval);
   });
 
   if (read(openKey) === "1") setOpen(true);

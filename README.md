@@ -52,8 +52,6 @@ and the fence's language is recorded with the entry and shown as a tag.
   **"Show all"** button that opens a modal with the full contents — themed via
   Quartz CSS variables, closes on backdrop click, `Esc` or the × button.
 - Entries live in the reader's browser only, never on the server.
-- Successful stash and unstash actions emit document-level custom events for
-  site-specific front-end behavior.
 - Pure CSS, driven by Quartz CSS variables, so it follows the theme.
 
 ## Install
@@ -127,7 +125,6 @@ them and the page must not change shape under the reader.
 | `className` | `string` | `"rucksack"` | Wrapper class of the panel. |
 | `maxNameLength` | `number` | `20` | Name length shown in full before the UI elides it. The stored name is never truncated. |
 | `sound` | `boolean` | `true` | Play a sound when something is stashed or unstashed. |
-| `logEvents` | `boolean` | `false` | Log emitted stash events to the browser console. |
 | `stashLabel` | `string` | `"+ Stash"` | Label on a block's button while it is not stashed. |
 | `stashedLabel` | `string` | `"✓ Stashed"` | Label on a block's button while it is stashed. |
 
@@ -181,54 +178,6 @@ Stashable blocks are discovered on every page, including pages that render no
 panel at all — but a page with no panel also has no `data-*` attributes, so it
 runs with the inlined config. Renders the panel in the sidebar if you want every
 option to apply everywhere.
-
-## Events
-
-After a successful action, Rucksack dispatches a custom event on `document`:
-
-| Event | Emitted when |
-| --- | --- |
-| `rucksack:stashed` | A block is stashed. |
-| `rucksack:unstashed` | A block or stored row is unstashed, including entries removed with `Clear`. |
-
-The event's `detail` contains an entry snapshot, the storage key, and the
-source of the action (`"block"`, `"panel"`, or `"clear"`):
-
-```ts
-import type { RucksackEventDetail } from "@quartz-community/plugin-rucksack";
-
-document.addEventListener("rucksack:stashed", (event) => {
-  const { entry } = (event as CustomEvent<RucksackEventDetail>).detail;
-
-  if (entry.name.toLowerCase() === "health potion") {
-    document.body.classList.add("has-health-potion");
-  }
-});
-```
-
-The corresponding event name for removal is `rucksack:unstashed`. The
-`entry` is a plain snapshot, so listeners may safely inspect it without
-altering Rucksack's stored state. The exported `RUCKSACK_EVENTS` constant and
-`RucksackEventDetail` type are also available from the package root.
-
-Set `logEvents: true` while developing to have Rucksack log each emitted event
-and its payload automatically:
-
-```ts
-Rucksack({ logEvents: true });
-```
-
-For temporary console-only debugging, logging can also be changed without a
-rebuild or reload:
-
-```js
-__RUCKSACK__.setEventLogging(true);  // enable
-__RUCKSACK__.setEventLogging(false); // disable
-__RUCKSACK__.getEventLogging();      // inspect the current setting
-```
-
-This override applies immediately to future events and lasts for the current
-page session. A full reload returns to the configured `logEvents` value.
 
 ## How a block becomes an entry
 
