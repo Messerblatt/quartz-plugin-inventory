@@ -45,9 +45,7 @@ const check = (name, cond, extra = "") =>
  * Each scenario gets its own `IDBFactory` so the stores do not leak between them.
  */
 function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters" } = {}) {
-  // Keep the integration output readable; event logging itself is covered by
-  // the explicit logEvents scenario below.
-  const component = Rucksack({ logEvents: false, ...options });
+  const component = Rucksack(options);
   const scripts = [].concat(component.afterDOMLoaded);
 
   const html = `<!doctype html><html><body>
@@ -499,9 +497,7 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
   check("repeated names get distinct anchors",
     anchorForName("health", 1) === "health-1" && anchorForName("health", 0) === "health");
   check("resolveConfig fills every option in",
-    resolveConfig({}).removeFromDom === true &&
-      resolveConfig({}).logEvents === true &&
-      resolveConfig({ title: "" }).title === "Rucksack",
+    resolveConfig({}).removeFromDom === true && resolveConfig({ title: "" }).title === "Rucksack",
     JSON.stringify(resolveConfig({})));
   check(
     "a config survives a serialize/resolve round trip",

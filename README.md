@@ -127,7 +127,7 @@ them and the page must not change shape under the reader.
 | `className` | `string` | `"rucksack"` | Wrapper class of the panel. |
 | `maxNameLength` | `number` | `20` | Name length shown in full before the UI elides it. The stored name is never truncated. |
 | `sound` | `boolean` | `true` | Play a sound when something is stashed or unstashed. |
-| `logEvents` | `boolean` | `true` | Log emitted stash events to the browser console. |
+| `logEvents` | `boolean` | `false` | Log emitted stash events to the browser console. |
 | `stashLabel` | `string` | `"+ Stash"` | Label on a block's button while it is not stashed. |
 | `stashedLabel` | `string` | `"✓ Stashed"` | Label on a block's button while it is stashed. |
 

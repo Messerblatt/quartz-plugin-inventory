@@ -71,7 +71,7 @@ export interface RucksackOptions {
   maxNameLength?: number;
   /** Play a sound when something is stashed / unstashed. @default true */
   sound?: boolean;
-  /** Log emitted stash events to the browser console. @default true */
+  /** Log emitted stash events to the browser console. @default false */
   logEvents?: boolean;
   /** Label on a block's button while it is not stashed. @default "+ Stash" */
   stashLabel?: string;
@@ -111,7 +111,7 @@ export const DEFAULT_CONFIG: ResolvedRucksackConfig = {
   nameAttribute: null,
   maxNameLength: 20,
   sound: true,
-  logEvents: true,
+  logEvents: false,
   stashLabel: "+ Stash",
   stashedLabel: "✓ Stashed",
 };
