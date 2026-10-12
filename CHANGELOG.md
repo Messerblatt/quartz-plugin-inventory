@@ -68,6 +68,11 @@ All of these are new, and can be set in code, in the plugin manifest's
   ignored) unless `merge: false`.
 - The "Show all" modal is wider, renders one entry per line, and sits at
   `z-index: 99999` so Quartz's left sidebar can never overlap it.
+- Successful stash and unstash actions dispatch `rucksack:stashed` and
+  `rucksack:unstashed` custom events on `document`, including the affected
+  entry snapshot and action source.
+- The `logEvents` option logs those event names and payloads to the browser
+  console when enabled; it is disabled by default.
 
 ## 0.1.0
 

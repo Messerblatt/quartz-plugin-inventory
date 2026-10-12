@@ -79,6 +79,7 @@
       "merge": true,
       "parseDetails": true,
       "sound": true,
+      "logEvents": false,
       "languages": "*"
     },
     "optionSchema": {
@@ -129,6 +130,10 @@
       "sound": {
         "type": "boolean",
         "description": "Play a sound when something is stashed or unstashed."
+      },
+      "logEvents": {
+        "type": "boolean",
+        "description": "Log emitted stash events to the browser console."
       },
       "stashLabel": {
         "type": "string",

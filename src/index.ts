@@ -6,6 +6,7 @@ export {
   DEFAULT_STORAGE_KEY,
   MAX_ANCHOR_LENGTH,
   MAX_DISPLAY_NAME,
+  RUCKSACK_EVENTS,
   UNCATEGORIZED,
   UNCATEGORIZED_LABEL,
   addEntry,
@@ -37,7 +38,13 @@ export {
   toggleEntry,
   truncateName,
 } from "./lib/rucksack";
-export type { EntryDetails, RucksackEntry } from "./lib/rucksack";
+export type {
+  EntryDetails,
+  RucksackEntry,
+  RucksackEventDetail,
+  RucksackEventName,
+  RucksackEventSource,
+} from "./lib/rucksack";
 
 export {
   CONFIG_ATTRIBUTES,

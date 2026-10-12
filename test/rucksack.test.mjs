@@ -29,11 +29,12 @@ const panel = (attrs = "") => `
       <ul data-rucksack-entries></ul>
       <button data-rucksack-show-all>Show all</button>
     </div>
-    <div class="rucksack-modal" data-rucksack-modal hidden>
-      <div class="rucksack-modal-content">
-        <ul class="rucksack-list" data-rucksack-modal-entries></ul>
-    </div>
-  </aside>`;
+     <div class="rucksack-modal" data-rucksack-modal hidden>
+       <div class="rucksack-modal-content">
+         <ul class="rucksack-list" data-rucksack-modal-entries></ul>
+         <button data-rucksack-clear>Clear</button>
+     </div>
+   </aside>`;
 
 const checks = [];
 const check = (name, cond, extra = "") =>
@@ -91,6 +92,11 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
     blocks: figure("health") + figure("health") + figure("goblin", "event"),
   });
 
+  const stashedEvents = [];
+  const unstashedEvents = [];
+  doc.addEventListener("rucksack:stashed", (event) => stashedEvents.push(event.detail));
+  doc.addEventListener("rucksack:unstashed", (event) => unstashedEvents.push(event.detail));
+
   await settle(() => doc.querySelectorAll("[data-rucksack-toggle-block]").length === 3);
 
   const buttons = doc.querySelectorAll("[data-rucksack-toggle-block]");
@@ -107,6 +113,15 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
 
   click(buttons[0]);
   await settle(() => rows().length === 1);
+  check(
+    "stashing emits a document event with the block details",
+    stashedEvents.length === 1 &&
+      stashedEvents[0].entry.name === "health" &&
+      stashedEvents[0].entry.slug.endsWith("#health") &&
+      stashedEvents[0].storageKey === "quartz:rucksack" &&
+      stashedEvents[0].source === "block",
+    JSON.stringify(stashedEvents),
+  );
   check("stashing adds one row with its metadata", rows().length === 1 && rows()[0].querySelector(".rucksack-quantity").textContent === "\u00d71");
   check(
     "the stashed block leaves the DOM entirely",
@@ -209,6 +224,13 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
   click(newestRow);
   await settle(() => doc.querySelectorAll('figure [data-language="item"]').length === 2);
   check(
+    "removing an entry from the panel emits an unstashed event",
+    unstashedEvents.length === 1 &&
+      unstashedEvents[0].source === "panel" &&
+      unstashedEvents[0].entry.name === "health",
+    JSON.stringify(unstashedEvents),
+  );
+  check(
     "unstashing from the panel puts the block back in the page",
     doc.querySelectorAll('figure [data-language="item"]').length === 2,
     `${doc.querySelectorAll('figure [data-language="item"]').length}`,
@@ -227,6 +249,13 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
     doc.querySelector("figure [data-rucksack-block]")?.getAttribute("data-rucksack-block") === "health-1",
     doc.querySelector("figure [data-rucksack-block]")?.getAttribute("data-rucksack-block"),
   );
+  click(doc.querySelector("[data-rucksack-clear]"));
+  await settle(() => rows().length === 0);
+  check(
+    "clearing the rucksack emits an unstashed event for each remaining row",
+    unstashedEvents.length === 2 && unstashedEvents[1].source === "clear",
+    JSON.stringify(unstashedEvents),
+  );
   check("the modal sits above the Quartz sidebar", /z-index:\s*9{3,}/.test(component.css));
 }
 
@@ -237,12 +266,21 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
     options: { removeFromDom: false },
     blocks: figure("lantern"),
   });
+  const stashedEvents = [];
+  const unstashedEvents = [];
+  doc.addEventListener("rucksack:stashed", (event) => stashedEvents.push(event.detail));
+  doc.addEventListener("rucksack:unstashed", (event) => unstashedEvents.push(event.detail));
 
   await settle(() => doc.querySelectorAll("[data-rucksack-toggle-block]").length === 1);
 
   const button = doc.querySelector("[data-rucksack-toggle-block]");
   click(button);
   await settle(() => rows().length === 1);
+  check(
+    "toggling a live block into the bag emits a stashed block event",
+    stashedEvents.length === 1 && stashedEvents[0].source === "block",
+    JSON.stringify(stashedEvents),
+  );
 
   check("the stashed block stays in the DOM when removeFromDom is off",
     doc.querySelectorAll("figure [data-language]").length === 2,
@@ -255,6 +293,9 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
     button.textContent);
   click(button);
   await settle(() => rows().length === 0);
+  check("toggling a live block back out emits an unstashed block event",
+    unstashedEvents.length === 1 && unstashedEvents[0].source === "block",
+    JSON.stringify(unstashedEvents));
   check("unstashing clears the marker",
     !doc.querySelector("[data-rucksack-block]").classList.contains("is-stashed") &&
       button.textContent === "+ Stash",
@@ -306,9 +347,17 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
 // --- other options --------------------------------------------------------
 {
   const { window, doc, settle, click, rows, stored } = boot({
-    options: { title: "Satchel", stashLabel: "Pack it", stashedLabel: "Packed", maxNameLength: 8 },
+    options: {
+      title: "Satchel",
+      stashLabel: "Pack it",
+      stashedLabel: "Packed",
+      maxNameLength: 8,
+      logEvents: true,
+    },
     blocks: figure("a very long name indeed"),
   });
+  const logs = [];
+  window.console.log = (...args) => logs.push(args);
 
   await settle(() => doc.querySelectorAll("[data-rucksack-toggle-block]").length === 1);
 
@@ -316,6 +365,11 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
   check("custom button labels are used", button.textContent === "Pack it", button.textContent);
   click(button);
   await settle(() => rows().length === 1);
+  check(
+    "logEvents logs emitted event names and payloads",
+    logs.some((args) => args[0] === "[rucksack] rucksack:stashed" && args[1]?.entry?.name === "a very long name indeed"),
+    JSON.stringify(logs),
+  );
   check("the custom stashed label is used", button.textContent === "Packed", button.textContent);
   check("maxNameLength shortens the preview but not the stored name",
     rows()[0].querySelector(".rucksack-name").textContent === "a very l..." &&
@@ -325,6 +379,14 @@ function boot({ options = {}, blocks = "", panelAttrs = "", path = "/characters"
     (await stored())[0].name === "a very long name indeed",
     (await stored())[0].name);
   check("the panel title is configurable", window.__RUCKSACK_CONFIG__.title === "Satchel");
+  check("event logging is configurable", window.__RUCKSACK_CONFIG__.logEvents === true);
+  check("event logging can be inspected from the debug API", window.__RUCKSACK__.getEventLogging() === true);
+  const loggedEvents = logs.length;
+  window.__RUCKSACK__.setEventLogging(false);
+  check("event logging can be disabled from the debug API", window.__RUCKSACK__.getEventLogging() === false);
+  click(doc.querySelector("[data-rucksack-clear]"));
+  await settle(() => rows().length === 0);
+  check("disabled event logging stops console output immediately", logs.length === loggedEvents, JSON.stringify(logs));
 }
 
 {

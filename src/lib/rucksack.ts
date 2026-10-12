@@ -40,6 +40,27 @@ export interface RucksackEntry {
   sources?: string[];
 }
 
+/** Browser events emitted after a stash operation completes successfully. */
+export const RUCKSACK_EVENTS = {
+  stashed: "rucksack:stashed",
+  unstashed: "rucksack:unstashed",
+} as const;
+
+export type RucksackEventName = (typeof RUCKSACK_EVENTS)[keyof typeof RUCKSACK_EVENTS];
+
+/** Where a stash/unstash action originated. */
+export type RucksackEventSource = "block" | "panel" | "clear";
+
+/** Payload carried by `rucksack:stashed` and `rucksack:unstashed`. */
+export interface RucksackEventDetail {
+  /** Snapshot of the block or stored row involved in the action. */
+  entry: RucksackEntry;
+  /** Storage namespace used by the rucksack. */
+  storageKey: string;
+  /** UI action that caused the event. */
+  source: RucksackEventSource;
+}
+
 export const DEFAULT_STORAGE_KEY = "quartz:rucksack";
 
 /**

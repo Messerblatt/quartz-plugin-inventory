@@ -71,6 +71,8 @@ export interface RucksackOptions {
   maxNameLength?: number;
   /** Play a sound when something is stashed / unstashed. @default true */
   sound?: boolean;
+  /** Log emitted stash events to the browser console. @default false */
+  logEvents?: boolean;
   /** Label on a block's button while it is not stashed. @default "+ Stash" */
   stashLabel?: string;
   /** Label on a block's button while it is stashed. @default "✓ Stashed" */
@@ -91,6 +93,7 @@ export interface ResolvedRucksackConfig {
   nameAttribute: string | null;
   maxNameLength: number;
   sound: boolean;
+  logEvents: boolean;
   stashLabel: string;
   stashedLabel: string;
 }
@@ -108,6 +111,7 @@ export const DEFAULT_CONFIG: ResolvedRucksackConfig = {
   nameAttribute: null,
   maxNameLength: 20,
   sound: true,
+  logEvents: false,
   stashLabel: "+ Stash",
   stashedLabel: "✓ Stashed",
 };
@@ -175,6 +179,7 @@ export function resolveConfig(
       ? Math.max(4, Math.round(maxNameLength))
       : DEFAULT_CONFIG.maxNameLength,
     sound: bool(opts.sound, DEFAULT_CONFIG.sound),
+    logEvents: bool(opts.logEvents, DEFAULT_CONFIG.logEvents),
     stashLabel: text(opts.stashLabel, DEFAULT_CONFIG.stashLabel),
     stashedLabel: text(opts.stashedLabel, DEFAULT_CONFIG.stashedLabel),
   };
@@ -212,6 +217,7 @@ export const CONFIG_ATTRIBUTES: Record<keyof RucksackOptions, string> = {
   nameAttribute: "data-rucksack-name-attribute",
   maxNameLength: "data-rucksack-max-name",
   sound: "data-rucksack-sound",
+  logEvents: "data-rucksack-log-events",
   stashLabel: "data-rucksack-stash-label",
   stashedLabel: "data-rucksack-stashed-label",
 };
@@ -235,6 +241,7 @@ export function configAttributes(config: ResolvedRucksackConfig): Record<string,
     [CONFIG_ATTRIBUTES.parseDetails]: String(config.parseDetails),
     [CONFIG_ATTRIBUTES.maxNameLength]: String(config.maxNameLength),
     [CONFIG_ATTRIBUTES.sound]: String(config.sound),
+    [CONFIG_ATTRIBUTES.logEvents]: String(config.logEvents),
     [CONFIG_ATTRIBUTES.stashLabel]: config.stashLabel,
     [CONFIG_ATTRIBUTES.stashedLabel]: config.stashedLabel,
   };
@@ -294,6 +301,7 @@ export function configFromAttributes(
     nameAttribute: pick("nameAttribute"),
     maxNameLength: maxNameLength === undefined ? undefined : Number(maxNameLength),
     sound: flag("sound"),
+    logEvents: flag("logEvents"),
     stashLabel: pick("stashLabel"),
     stashedLabel: pick("stashedLabel"),
   });
