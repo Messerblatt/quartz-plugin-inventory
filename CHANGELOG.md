@@ -72,7 +72,8 @@ All of these are new, and can be set in code, in the plugin manifest's
   `rucksack:unstashed` custom events on `document`, including the affected
   entry snapshot and action source.
 - The `logEvents` option logs those event names and payloads to the browser
-  console when enabled; it is disabled by default.
+  console when enabled; it is enabled by default.
+- Stashing now uses the `oh.mp3` sound supplied with the plugin.
 
 ## 0.1.0
 

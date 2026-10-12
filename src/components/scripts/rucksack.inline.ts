@@ -20,7 +20,7 @@
  * must be readable synchronously while the panel renders.
  */
 
-import PLING_SRC from "../assets/pling.mp3";
+import STASH_SRC from "../../../oh.mp3";
 import UNPLINK_SRC from "../assets/unplink.mp3";
 import {
   anchorForName,
@@ -710,8 +710,8 @@ async function toggleBlock(store: RucksackStore, block: DiscoveredBlock, storage
  * every stash is a click, so this normally plays first time. A rejection is
  * swallowed: the rucksack is still correct without the sound.
  */
-const pling = typeof Audio === "function" ? new Audio(PLING_SRC) : null;
-if (pling) pling.volume = 0.4;
+const stashSound = typeof Audio === "function" ? new Audio(STASH_SRC) : null;
+if (stashSound) stashSound.volume = 0.4;
 
 /** The softer, descending counterpart, played when something leaves the bag. */
 const unplink = typeof Audio === "function" ? new Audio(UNPLINK_SRC) : null;
@@ -753,7 +753,7 @@ function blink() {
 /** Something went into the bag. */
 function celebrate() {
   blink();
-  play(pling);
+  play(stashSound);
 }
 
 /** Something came back out. */

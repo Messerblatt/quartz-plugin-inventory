@@ -79,7 +79,7 @@
       "merge": true,
       "parseDetails": true,
       "sound": true,
-      "logEvents": false,
+      "logEvents": true,
       "languages": "*"
     },
     "optionSchema": {
